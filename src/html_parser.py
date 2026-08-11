@@ -23,21 +23,7 @@ class HTMLParser:
         return self._parse_html(html, url)
 
     def _parse_html(self, html: str, url: str) -> dict[str, Any]:
-        result: dict[str, Any] = {
-            "url": url,
-            "title": "",
-            "text": "",
-            "links": [],
-            "metadata": {
-                "title": "",
-                "description": "",
-                "keywords": "",
-            },
-            "images": [],
-            "headings": [],
-            "tables": [],
-            "lists": [],
-        }
+        result = self.empty_result(url)
 
         try:
             soup = BeautifulSoup(html, "lxml")
@@ -76,6 +62,26 @@ class HTMLParser:
 
         result["title"] = result["metadata"].get("title", "")
         return result
+
+    @staticmethod
+    def empty_result(url: str, *, error: str | None = None) -> dict[str, Any]:
+        """Build a result with a stable schema for failed or empty pages."""
+        return {
+            "url": url,
+            "title": "",
+            "text": "",
+            "links": [],
+            "metadata": {
+                "title": "",
+                "description": "",
+                "keywords": "",
+            },
+            "images": [],
+            "headings": [],
+            "tables": [],
+            "lists": [],
+            "error": error,
+        }
 
     def extract_links(self, soup: BeautifulSoup, base_url: str) -> list[str]:
         """Return unique, absolute HTTP(S) links in document order."""
@@ -186,7 +192,7 @@ class HTMLParser:
             for row in table.find_all("tr"):
                 header_cells = row.find_all("th")
                 data_cells = row.find_all("td")
-                if header_cells and not data_cells and not headers: #then it's only a header row
+                if header_cells and not data_cells and not headers:
                     headers = [
                         self._clean_text(cell.get_text(" ", strip=True))
                         for cell in header_cells

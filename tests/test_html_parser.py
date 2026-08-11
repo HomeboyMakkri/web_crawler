@@ -60,6 +60,7 @@ async def test_parse_valid_html() -> None:
         "description": "Parser description",
         "keywords": "python, async, crawler",
     }
+    assert result["error"] is None
     assert "Hello async world ." in result["text"]
     assert "secretScript" not in result["text"]
     assert result["links"] == [
@@ -192,3 +193,18 @@ async def test_extractor_error_keeps_other_partial_data(
     assert result["links"] == []
     assert result["images"]
     assert "Could not extract links" in caplog.text
+
+@pytest.mark.asyncio
+async def test_parse_valid_html_does_not_log_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    parser = HTMLParser()
+    caplog.set_level(logging.WARNING, logger="src.html_parser")
+
+    result = await parser.parse_html(
+        "<html><body><p>Test</p></body></html>",
+        "https://example.com/page",
+    )
+
+    assert result["text"] == "Test"
+    assert "Invalid CSS selector" not in caplog.text

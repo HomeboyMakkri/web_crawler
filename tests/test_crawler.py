@@ -174,3 +174,59 @@ async def test_session_is_reused_and_closed() -> None:
 def test_invalid_configuration(kwargs: dict, parameter_name: str) -> None:
     with pytest.raises(ValueError, match=parameter_name):
         AsyncCrawler(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_parse_returns_expected_structure() -> None:
+    url = "https://example.com/page"
+    html_content = """
+        <html>
+          <head>
+            <title>Test</title>
+            <meta name="description" content="Integration test">
+          </head>
+          <body>
+            <h1>Hello</h1>
+            <a href="/next">Next</a>
+          </body>
+        </html>
+    """
+
+    async with AsyncCrawler(filter_external_links=True) as crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            return_value=MockResponseContext(body=html_content),
+        ):
+            result = await crawler.fetch_and_parse(url)
+
+    assert result["url"] == url
+    assert result["title"] == "Test"
+    assert result["text"] == "Hello Next"
+    assert result["links"] == ["https://example.com/next"]
+    assert result["metadata"]["description"] == "Integration test"
+    assert result["headings"] == [{"level": "h1", "text": "Hello"}]
+    assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_parse_returns_structured_fetch_error() -> None:
+    url = "https://example.com/unavailable"
+
+    async with AsyncCrawler() as crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            return_value=MockResponseContext(
+                enter_exception=aiohttp.ClientConnectionError("Unavailable")
+            ),
+        ):
+            result = await crawler.fetch_and_parse(url)
+
+    assert result["url"] == url
+    assert result["title"] == ""
+    assert result["text"] == ""
+    assert result["links"] == []
+    assert result["error"] == "Error: ClientError ClientConnectionError"

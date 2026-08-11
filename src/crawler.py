@@ -3,8 +3,11 @@
 import asyncio
 import logging
 from numbers import Real
+from typing import Any
 
 import aiohttp
+
+from .html_parser import HTMLParser
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +23,7 @@ class AsyncCrawler:
         connect_timeout: float = 5.0,
         read_timeout: float = 15.0,
         limit_per_host: int | None = None,
+        filter_external_links: bool = False,
     ) -> None:
         self._max_concurrent = self._validate_positive_int(
             max_concurrent, "max_concurrent"
@@ -38,6 +42,7 @@ class AsyncCrawler:
 
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
         self._session: aiohttp.ClientSession | None = None
+        self._parser = HTMLParser(filter_external_links=filter_external_links)
 
     @property
     def session(self) -> aiohttp.ClientSession | None:
@@ -109,6 +114,22 @@ class AsyncCrawler:
         """Load all URLs concurrently, bounded by ``max_concurrent``."""
         results = await asyncio.gather(*(self.fetch_url(url) for url in urls))
         return dict(zip(urls, results, strict=True))
+
+    async def fetch_and_parse(self, url: str) -> dict[str, Any]:
+        """Load one URL and return its structured parsed representation."""
+        html = await self.fetch_url(url)
+        if html.startswith("Error:"):
+            logger.warning("Skipping HTML parsing for %s: %s", url, html)
+            return self._parser.empty_result(url, error=html)
+
+        result = await self._parser.parse_html(html, url)
+        logger.info(
+            "Successfully parsed: %s (links=%d, text=%d chars)",
+            url,
+            len(result["links"]),
+            len(result["text"]),
+        )
+        return result
 
     async def close(self) -> None:
         """Close the shared HTTP session; calling this twice is safe."""
