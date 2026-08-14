@@ -1,6 +1,9 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
+from types import TracebackType
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -27,14 +30,52 @@ class MockResponseContext:
         self._response.raise_for_status = MagicMock(side_effect=response_exception)
         self._response.text = AsyncMock(return_value=body)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Any:
         await asyncio.sleep(self._delay)
         if self._enter_exception is not None:
             raise self._enter_exception
         return self._response
 
-    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         return None
+
+
+class BlockingResponseContext:
+    """Keep a mocked HTTP request active until a test releases it."""
+
+    def __init__(self, release: asyncio.Event) -> None:
+        self._release = release
+        self._response = MagicMock(status=200)
+        self._response.raise_for_status = MagicMock()
+        self._response.text = AsyncMock(return_value="OK")
+
+    async def __aenter__(self) -> Any:
+        await self._release.wait()
+        return self._response
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+
+async def wait_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 0.2,
+) -> None:
+    """Yield to crawler tasks until they reach an expected state."""
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -144,6 +185,69 @@ async def test_concurrency_speed_comparison() -> None:
     # Sequential time is about 0.30 s and concurrent time about 0.05 s.
     # A generous ratio keeps the test stable on a busy machine.
     assert concurrent_time < sequential_time / 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_uses_global_semaphore_limit() -> None:
+    release = asyncio.Event()
+    urls = [
+        "https://one.example/page",
+        "https://two.example/page",
+        "https://three.example/page",
+    ]
+
+    async with AsyncCrawler(max_concurrent=2, limit_per_host=2) as crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            side_effect=lambda *args, **kwargs: BlockingResponseContext(release),
+        ):
+            requests = [asyncio.create_task(crawler.fetch_url(url)) for url in urls]
+            await wait_until(
+                lambda: crawler.semaphore_manager.active_total == 2
+                and crawler.semaphore_manager.get_stats()["waiting_global"] == 1
+            )
+
+            assert crawler.semaphore_manager.active_by_domain == {
+                "one.example": 1,
+                "two.example": 1,
+            }
+
+            release.set()
+            results = await asyncio.gather(*requests)
+
+    assert results == ["OK", "OK", "OK"]
+    assert crawler.semaphore_manager.active_total == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_uses_per_domain_semaphore_limit() -> None:
+    release = asyncio.Event()
+    urls = [f"https://example.com/page/{index}" for index in range(3)]
+
+    async with AsyncCrawler(max_concurrent=3, limit_per_host=1) as crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            side_effect=lambda *args, **kwargs: BlockingResponseContext(release),
+        ):
+            requests = [asyncio.create_task(crawler.fetch_url(url)) for url in urls]
+            await wait_until(
+                lambda: crawler.semaphore_manager.active_total == 1
+                and crawler.semaphore_manager.get_stats()["waiting_by_domain"]
+                == {"example.com": 2}
+            )
+
+            assert crawler.semaphore_manager.active_by_domain == {"example.com": 1}
+            assert crawler.semaphore_manager.get_stats()["waiting_global"] == 0
+
+            release.set()
+            results = await asyncio.gather(*requests)
+
+    assert results == ["OK", "OK", "OK"]
+    assert crawler.semaphore_manager.active_by_domain == {}
 
 
 @pytest.mark.asyncio
