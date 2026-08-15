@@ -12,6 +12,7 @@ def stats() -> dict[str, int | float]:
         "pages_active": 1,
         "pages_successful": 2,
         "pages_failed": 1,
+        "pages_blocked": 1,
         "pages_completed": 3,
         "active_requests": 1,
         "max_depth_reached": 1,
@@ -31,7 +32,7 @@ def test_report_once_formats_a_readable_snapshot() -> None:
 
     assert messages == [
         "Итог: обработано 3/5 | успешно 2 | в очереди 1 | "
-        "активно 1 | ошибок 1 | скорость 2.00 стр/с"
+        "активно 1 | ошибок 1 | заблокировано 1 | скорость 2.00 стр/с"
     ]
 
 

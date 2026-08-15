@@ -57,5 +57,6 @@ class CrawlReporter:
             f"в очереди {stats['pages_queued']} | "
             f"активно {stats['pages_active']} | "
             f"ошибок {stats['pages_failed']} | "
+            f"заблокировано {stats.get('pages_blocked', 0)} | "
             f"скорость {stats['pages_per_second']:.2f} стр/с"
         )

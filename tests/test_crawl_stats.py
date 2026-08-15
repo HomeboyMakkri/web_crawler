@@ -38,6 +38,7 @@ def test_stats_are_zero_before_a_crawl() -> None:
         "pages_active": 0,
         "pages_successful": 0,
         "pages_failed": 0,
+        "pages_blocked": 0,
         "pages_completed": 0,
         "active_requests": 0,
         "max_depth_reached": 0,

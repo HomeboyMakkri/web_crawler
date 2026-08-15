@@ -9,9 +9,14 @@ from typing import Any
 
 import aiohttp
 
-from .html_parser import HTMLParser
 from .crawl_reporter import CrawlReporter
 from .crawler_queue import CrawlerQueue
+from .fetch_result import FetchOutcome, FetchResult
+from .html_parser import HTMLParser
+from .http_transport import HttpTransport
+from .politeness_manager import PolitenessManager
+from .rate_limiter import RateLimiter
+from .robots_parser import RobotsParser
 from .semaphore_manager import SemaphoreManager
 from .url_filter import URLFilter
 
@@ -31,33 +36,33 @@ class AsyncCrawler:
         limit_per_host: int | None = None,
         filter_external_links: bool = False,
         max_depth: int = 2,
+        requests_per_second: float | None = None,
+        respect_robots: bool = False,
+        min_delay: float = 0.0,
+        user_agent: str = "AsyncCrawler/1.0",
     ) -> None:
-        self._max_concurrent = self._validate_positive_int(
-            max_concurrent, "max_concurrent"
+        self._transport = HttpTransport(
+            max_concurrent=max_concurrent,
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            limit_per_host=limit_per_host,
+            user_agent=user_agent,
         )
-        self._connect_timeout = self._validate_positive_number(
-            connect_timeout, "connect_timeout"
-        )
-        self._read_timeout = self._validate_positive_number(
-            read_timeout, "read_timeout"
-        )
-        self._limit_per_host = (
-            self._max_concurrent
-            if limit_per_host is None
-            else self._validate_positive_int(limit_per_host, "limit_per_host")
-        )
+        self._max_concurrent = max_concurrent
         self._max_depth = self._validate_non_negative_int(max_depth, "max_depth")
-
-        self._semaphore_manager = SemaphoreManager(
-            global_limit=self._max_concurrent,
-            per_domain_limit=self._limit_per_host,
-        )
-        self._session: aiohttp.ClientSession | None = None
         self._parser = HTMLParser(filter_external_links=filter_external_links)
+        self._politeness = PolitenessManager(
+            fetcher=self._transport.fetch,
+            requests_per_second=requests_per_second,
+            respect_robots=respect_robots,
+            min_delay=min_delay,
+            user_agent=user_agent,
+        )
 
         self.visited_urls: set[str] = set()
         self.processed_urls: dict[str, dict[str, Any]] = {}
         self.failed_urls: dict[str, str] = {}
+        self.blocked_urls: dict[str, str] = {}
         self.url_depths: dict[str, int] = {}
         self._crawl_queue: CrawlerQueue | None = None
         self._crawl_running = False
@@ -67,73 +72,47 @@ class AsyncCrawler:
     @property
     def session(self) -> aiohttp.ClientSession | None:
         """Expose the current session for inspection and testing."""
-        return self._session
+        return self._transport.session
 
     @property
     def semaphore_manager(self) -> SemaphoreManager:
         """Expose read-only access to request concurrency statistics."""
-        return self._semaphore_manager
+        return self._transport.semaphore_manager
+
+    @property
+    def rate_limiter(self) -> RateLimiter | None:
+        """Compatibility view of the limiter now owned by politeness policy."""
+        return self._politeness.rate_limiter
+
+    @property
+    def robots_parser(self) -> RobotsParser | None:
+        """Compatibility view of the parser now owned by politeness policy."""
+        return self._politeness.robots_parser
+
+    @property
+    def politeness_manager(self) -> PolitenessManager:
+        """Expose the request-policy component for inspection and testing."""
+        return self._politeness
 
     def _get_session(self) -> aiohttp.ClientSession:
-        """Create the shared session lazily and reuse it between requests."""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(
-                total=None,
-                connect=self._connect_timeout,
-                sock_read=self._read_timeout,
-            )
-            connector = aiohttp.TCPConnector(
-                limit=self._max_concurrent,
-                limit_per_host=self._limit_per_host,
-                ttl_dns_cache=300,
-            )
-            self._session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=connector,
-            )
-
-        return self._session
+        """Compatibility adapter for tests and earlier project stages."""
+        return self._transport.get_session()
 
     async def fetch_url(self, url: str) -> str:
-        """Load one URL and return either its body or a readable error."""
-        session = self._get_session()
+        """Day 1 adapter returning either page content or a readable error."""
+        result = await self.fetch_result(url)
+        return self._to_legacy_fetch_value(result)
 
-        async with self._semaphore_manager.request_slot(url):
-            logger.info("Fetching URL: %s", url)
-
-            try:
-                async with session.get(url) as response:
-                    response.raise_for_status()
-                    content = await response.text()
-            except aiohttp.ClientResponseError as error:
-                logger.warning(
-                    "HTTP error for %s: %s (status=%s)",
-                    url,
-                    type(error).__name__,
-                    error.status,
+    async def fetch_result(self, url: str) -> FetchResult:
+        """Fetch one URL using the typed internal request contract."""
+        policy_result = await self._politeness.prepare_request(url)
+        if policy_result is not None:
+            if policy_result.outcome is FetchOutcome.ROBOTS_BLOCKED:
+                self.blocked_urls[url] = (
+                    policy_result.error or "Blocked by robots.txt"
                 )
-                return f"Error: HTTP {error.status}"
-            except asyncio.TimeoutError:
-                # aiohttp.ServerTimeoutError is also a ClientError, so this
-                # handler must appear before the general ClientError handler.
-                logger.warning("Timeout while fetching URL: %s", url)
-                return f"Error: Timeout for {url}"
-            except aiohttp.ClientError as error:
-                logger.warning(
-                    "Network error for %s: %s (%s)",
-                    url,
-                    type(error).__name__,
-                    error,
-                )
-                return f"Error: ClientError {type(error).__name__}"
-
-            logger.info(
-                "Successfully loaded: %s (status=%s, size=%d B)",
-                url,
-                response.status,
-                len(content),
-            )
-            return content
+            return policy_result
+        return await self._transport.fetch(url)
 
     async def fetch_urls(self, urls: list[str]) -> dict[str, str]:
         """Load all URLs concurrently, bounded by ``max_concurrent``."""
@@ -142,10 +121,15 @@ class AsyncCrawler:
 
     async def fetch_and_parse(self, url: str) -> dict[str, Any]:
         """Load one URL and return its structured parsed representation."""
-        html = await self.fetch_url(url)
-        if html.startswith("Error:"):
-            logger.warning("Skipping HTML parsing for %s: %s", url, html)
-            return self._parser.empty_result(url, error=html)
+        fetch_result = await self.fetch_result(url)
+        if not fetch_result.is_success:
+            error = self._to_legacy_fetch_value(fetch_result)
+            logger.warning("Skipping HTML parsing for %s: %s", url, error)
+            return self._parser.empty_result(url, error=error)
+
+        html = fetch_result.content
+        if html is None:
+            raise RuntimeError("successful FetchResult must contain HTML content")
 
         result = await self._parser.parse_html(html, url)
         logger.info(
@@ -261,6 +245,7 @@ class AsyncCrawler:
                 "active": 0,
                 "processed": 0,
                 "failed": 0,
+                "blocked": 0,
                 "completed": 0,
             }
         )
@@ -273,8 +258,9 @@ class AsyncCrawler:
             "pages_active": queue_stats["active"],
             "pages_successful": queue_stats["processed"],
             "pages_failed": queue_stats["failed"],
+            "pages_blocked": queue_stats["blocked"],
             "pages_completed": completed,
-            "active_requests": self._semaphore_manager.active_total,
+            "active_requests": self._transport.semaphore_manager.active_total,
             "max_depth_reached": max(self.url_depths.values(), default=0),
             "total_text_length": sum(
                 len(str(result.get("text", "")))
@@ -308,7 +294,7 @@ class AsyncCrawler:
     ) -> None:
         """Consume crawl tasks and schedule permitted discovered links."""
         while True:
-            task = await queue.get_next()
+            task = await queue._wait_for_next_task()
             self.visited_urls.add(task.url)
             self.url_depths[task.url] = task.depth
 
@@ -318,8 +304,11 @@ class AsyncCrawler:
                 fetch_error = result.get("error")
                 if fetch_error:
                     error_message = str(fetch_error)
-                    self.failed_urls[task.url] = error_message
-                    queue.mark_failed(task.url, error_message)
+                    if task.url in self.blocked_urls:
+                        queue.mark_blocked(task.url, self.blocked_urls[task.url])
+                    else:
+                        self.failed_urls[task.url] = error_message
+                        queue.mark_failed(task.url, error_message)
                     continue
 
                 if task.depth < max_depth:
@@ -356,6 +345,7 @@ class AsyncCrawler:
         self.visited_urls.clear()
         self.processed_urls.clear()
         self.failed_urls.clear()
+        self.blocked_urls.clear()
         self.url_depths.clear()
         self._crawl_queue = None
         self._crawl_started_at = None
@@ -363,12 +353,11 @@ class AsyncCrawler:
 
     async def close(self) -> None:
         """Close the shared HTTP session; calling this twice is safe."""
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
-        self._session = None
+        await self._politeness.close()
+        await self._transport.close()
 
     async def __aenter__(self) -> "AsyncCrawler":
-        self._get_session()
+        await self._transport.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
@@ -391,3 +380,20 @@ class AsyncCrawler:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"{name} must be a non-negative integer")
         return value
+
+    @staticmethod
+    def _to_legacy_fetch_value(result: FetchResult) -> str:
+        """Keep the original Day 1 string API at the public boundary."""
+        if result.outcome is FetchOutcome.SUCCESS:
+            if result.content is None:
+                raise RuntimeError("successful FetchResult must contain content")
+            return result.content
+        if result.outcome is FetchOutcome.HTTP_ERROR:
+            return f"Error: HTTP {result.status_code}"
+        if result.outcome is FetchOutcome.TIMEOUT:
+            return f"Error: Timeout for {result.url}"
+        if result.outcome is FetchOutcome.ROBOTS_BLOCKED:
+            return f"Error: {result.error} for {result.url}"
+
+        error_type = (result.error or "ClientError").partition(":")[0]
+        return f"Error: ClientError {error_type}"

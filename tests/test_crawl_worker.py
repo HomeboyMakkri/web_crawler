@@ -223,6 +223,7 @@ def test_reset_crawl_state_clears_previous_run() -> None:
     crawler.visited_urls.add("https://example.com")
     crawler.processed_urls["https://example.com"] = page("https://example.com")
     crawler.failed_urls["https://failed.example"] = "Timeout"
+    crawler.blocked_urls["https://blocked.example"] = "Blocked by robots.txt"
     crawler.url_depths["https://example.com"] = 0
 
     crawler._reset_crawl_state()
@@ -230,4 +231,5 @@ def test_reset_crawl_state_clears_previous_run() -> None:
     assert crawler.visited_urls == set()
     assert crawler.processed_urls == {}
     assert crawler.failed_urls == {}
+    assert crawler.blocked_urls == {}
     assert crawler.url_depths == {}

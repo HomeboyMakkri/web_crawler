@@ -27,6 +27,7 @@ class CrawlerQueue:
         self._active_urls: set[str] = set()
         self._processed_urls: set[str] = set()
         self._failed_urls: dict[str, str] = {}
+        self._blocked_urls: dict[str, str] = {}
 
     def add_url(
         self,
@@ -54,12 +55,26 @@ class CrawlerQueue:
         self._queued_urls.add(normalized_url)
         return True
 
-    async def get_next(self) -> CrawlTask:
-        """Wait for and return the highest-priority queued task."""
+    async def get_next(self) -> str | None:
+        """Return the next URL, or ``None`` immediately when the queue is empty."""
+        try:
+            task = self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+        self._activate(task)
+        return task.url
+
+    async def _wait_for_next_task(self) -> CrawlTask:
+        """Wait for a full task used internally by recursive crawl workers."""
         task = await self._queue.get()
+        self._activate(task)
+        return task
+
+    def _activate(self, task: CrawlTask) -> None:
+        """Move one dequeued task into the active lifecycle state."""
         self._queued_urls.remove(task.url)
         self._active_urls.add(task.url)
-        return task
 
     def mark_processed(self, url: str) -> None:
         """Mark an active URL as successfully processed."""
@@ -76,6 +91,15 @@ class CrawlerQueue:
         self._finish_active(normalized_url)
         self._failed_urls[normalized_url] = error.strip()
 
+    def mark_blocked(self, url: str, reason: str) -> None:
+        """Finish an active URL that policy intentionally prevented fetching."""
+        normalized_url = self._validate_url(url)
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+
+        self._finish_active(normalized_url)
+        self._blocked_urls[normalized_url] = reason.strip()
+
     async def join(self) -> None:
         """Wait until every scheduled task has been marked as finished."""
         await self._queue.join()
@@ -84,13 +108,15 @@ class CrawlerQueue:
         """Return a consistent snapshot of queue lifecycle counters."""
         processed = len(self._processed_urls)
         failed = len(self._failed_urls)
+        blocked = len(self._blocked_urls)
         return {
             "scheduled": len(self._scheduled_urls),
             "queued": self._queue.qsize(),
             "active": len(self._active_urls),
             "processed": processed,
             "failed": failed,
-            "completed": processed + failed,
+            "blocked": blocked,
+            "completed": processed + failed + blocked,
         }
 
     @property
@@ -113,6 +139,10 @@ class CrawlerQueue:
     @property
     def failed_urls(self) -> dict[str, str]:
         return self._failed_urls.copy()
+
+    @property
+    def blocked_urls(self) -> dict[str, str]:
+        return self._blocked_urls.copy()
 
     def _finish_active(self, url: str) -> None:
         if url not in self._active_urls:

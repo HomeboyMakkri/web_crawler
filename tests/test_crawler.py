@@ -10,6 +10,7 @@ import aiohttp
 import pytest
 
 from src.crawler import AsyncCrawler
+from src.fetch_result import FetchOutcome
 
 
 class MockResponseContext:
@@ -82,7 +83,7 @@ async def wait_until(
 async def test_fetch_valid_url(caplog: pytest.LogCaptureFixture) -> None:
     url = "https://example.com/page"
     expected_body = "<html>Hello World</html>"
-    caplog.set_level(logging.INFO, logger="src.crawler")
+    caplog.set_level(logging.INFO, logger="src.http_transport")
 
     async with AsyncCrawler() as crawler:
         assert crawler.session is not None
@@ -96,6 +97,24 @@ async def test_fetch_valid_url(caplog: pytest.LogCaptureFixture) -> None:
     assert result == expected_body
     assert f"Fetching URL: {url}" in caplog.text
     assert f"Successfully loaded: {url}" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fetch_result_exposes_typed_internal_contract() -> None:
+    url = "https://example.com/page"
+
+    async with AsyncCrawler() as crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            return_value=MockResponseContext(body="typed content"),
+        ):
+            result = await crawler.fetch_result(url)
+
+    assert result.outcome is FetchOutcome.SUCCESS
+    assert result.content == "typed content"
+    assert result.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -273,6 +292,11 @@ async def test_session_is_reused_and_closed() -> None:
         ({"connect_timeout": 0}, "connect_timeout"),
         ({"read_timeout": -1}, "read_timeout"),
         ({"limit_per_host": 0}, "limit_per_host"),
+        ({"requests_per_second": 0}, "requests_per_second"),
+        ({"respect_robots": "yes"}, "respect_robots"),
+        ({"min_delay": -1}, "min_delay"),
+        ({"min_delay": float("nan")}, "min_delay"),
+        ({"user_agent": ""}, "user_agent"),
     ],
 )
 def test_invalid_configuration(kwargs: dict, parameter_name: str) -> None:
