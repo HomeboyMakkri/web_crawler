@@ -296,6 +296,7 @@ async def test_session_is_reused_and_closed() -> None:
         ({"respect_robots": "yes"}, "respect_robots"),
         ({"min_delay": -1}, "min_delay"),
         ({"min_delay": float("nan")}, "min_delay"),
+        ({"jitter": -1}, "jitter"),
         ({"user_agent": ""}, "user_agent"),
     ],
 )

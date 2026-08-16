@@ -39,6 +39,7 @@ class AsyncCrawler:
         requests_per_second: float | None = None,
         respect_robots: bool = False,
         min_delay: float = 0.0,
+        jitter: float = 0.0,
         user_agent: str = "AsyncCrawler/1.0",
     ) -> None:
         self._transport = HttpTransport(
@@ -56,6 +57,7 @@ class AsyncCrawler:
             requests_per_second=requests_per_second,
             respect_robots=respect_robots,
             min_delay=min_delay,
+            jitter=jitter,
             user_agent=user_agent,
         )
 

@@ -2,6 +2,7 @@
 
 import logging
 import math
+import random
 from collections.abc import Awaitable, Callable
 from numbers import Real
 
@@ -14,6 +15,7 @@ from .semaphore_manager import SemaphoreManager
 logger = logging.getLogger(__name__)
 
 Fetcher = Callable[[str], Awaitable[FetchResult]]
+RandomSource = Callable[[], float]
 
 
 class PolitenessManager:
@@ -31,7 +33,9 @@ class PolitenessManager:
         requests_per_second: float | None = None,
         respect_robots: bool = False,
         min_delay: float = 0.0,
+        jitter: float = 0.0,
         user_agent: str = "AsyncCrawler/1.0",
+        random_source: RandomSource = random.random,
     ) -> None:
         if not callable(fetcher):
             raise ValueError("fetcher must be callable")
@@ -43,15 +47,20 @@ class PolitenessManager:
             min_delay,
             "min_delay",
         )
+        self._jitter = self._validate_non_negative_number(jitter, "jitter")
         self._user_agent = self._validate_non_empty_string(
             user_agent,
             "user_agent",
         )
+        if not callable(random_source):
+            raise ValueError("random_source must be callable")
+        self._random_source = random_source
 
         rate_limiting_enabled = (
             requests_per_second is not None
             or respect_robots
             or self._min_delay > 0
+            or self._jitter > 0
         )
         self._rate_limiter = (
             RateLimiter(
@@ -110,15 +119,29 @@ class PolitenessManager:
         if self._rate_limiter is None:
             return
         domain = SemaphoreManager.get_domain(url)
+        required_interval = max(self._min_delay, extra_delay)
+        if self._jitter > 0:
+            required_interval += self._get_jitter_delay()
         await self._rate_limiter.acquire(
             domain,
-            min_interval=max(self._min_delay, extra_delay),
+            min_interval=required_interval,
         )
 
     async def _fetch_robots_document(self, url: str) -> FetchResult:
         """Fetch robots.txt without recursively checking robots.txt itself."""
         await self._acquire_rate_slot(url)
         return await self._fetcher(url)
+
+    def _get_jitter_delay(self) -> float:
+        random_fraction = self._random_source()
+        if (
+            isinstance(random_fraction, bool)
+            or not isinstance(random_fraction, Real)
+            or not math.isfinite(random_fraction)
+            or not 0.0 <= random_fraction <= 1.0
+        ):
+            raise ValueError("random_source must return a finite number from 0 to 1")
+        return float(random_fraction) * self._jitter
 
     @staticmethod
     def _validate_non_negative_number(value: float, name: str) -> float:
