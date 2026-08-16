@@ -262,6 +262,7 @@ class AsyncCrawler:
             if show_progress:
                 reporter = CrawlReporter(
                     self.get_crawl_stats,
+                    request_stats_provider=self.get_request_stats,
                     interval=validated_progress_interval,
                     output=progress_output,
                 )

@@ -108,6 +108,10 @@ async def test_crawl_reporter_emits_live_and_final_progress() -> None:
 
     assert any(message.startswith("Прогресс:") for message in messages)
     assert messages[-1].startswith("Итог: обработано 1/1")
+    assert "HTTP-запросов 0 (0.00/с)" in messages[-1]
+    assert "ср. задержка 0.000 с" in messages[-1]
+    assert "retry 0" in messages[-1]
+    assert "robots.txt блокировок 0" in messages[-1]
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,16 @@ def stats() -> dict[str, int | float]:
     }
 
 
+def request_stats() -> dict[str, int | float]:
+    return {
+        "total_requests": 8,
+        "current_requests_per_second": 2.5,
+        "average_rate_limit_wait": 0.375,
+        "scheduled_retries": 2,
+        "robots_blocked": 1,
+    }
+
+
 def test_report_once_formats_a_readable_snapshot() -> None:
     messages: list[str] = []
     reporter = CrawlReporter(stats, output=messages.append)
@@ -34,6 +44,33 @@ def test_report_once_formats_a_readable_snapshot() -> None:
         "Итог: обработано 3/5 | успешно 2 | в очереди 1 | "
         "активно 1 | ошибок 1 | заблокировано 1 | скорость 2.00 стр/с"
     ]
+
+
+def test_report_once_includes_request_and_politeness_statistics() -> None:
+    messages: list[str] = []
+    reporter = CrawlReporter(
+        stats,
+        request_stats_provider=request_stats,
+        output=messages.append,
+    )
+
+    reporter.report_once()
+
+    assert messages == [
+        "Прогресс: обработано 3/5 | успешно 2 | в очереди 1 | "
+        "активно 1 | ошибок 1 | заблокировано 1 | скорость 2.00 стр/с | "
+        "HTTP-запросов 8 (2.50/с) | ср. задержка 0.375 с | retry 2 | "
+        "robots.txt блокировок 1"
+    ]
+
+
+def test_request_statistics_use_safe_defaults_for_missing_fields() -> None:
+    message = CrawlReporter.format_stats(stats(), request_stats={})
+
+    assert "HTTP-запросов 0 (0.00/с)" in message
+    assert "ср. задержка 0.000 с" in message
+    assert "retry 0" in message
+    assert "robots.txt блокировок 0" in message
 
 
 @pytest.mark.asyncio
@@ -58,7 +95,18 @@ async def test_run_reports_repeatedly_until_cancelled() -> None:
     assert all(message.startswith("Прогресс:") for message in messages)
 
 
-@pytest.mark.parametrize("interval", [0, -1, True])
-def test_reporter_validates_interval(interval: float) -> None:
-    with pytest.raises(ValueError, match="interval"):
-        CrawlReporter(stats, interval=interval)
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"interval": 0}, "interval"),
+        ({"interval": -1}, "interval"),
+        ({"interval": True}, "interval"),
+        ({"request_stats_provider": "stats"}, "request_stats_provider"),
+    ],
+)
+def test_reporter_validates_configuration(
+    kwargs: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        CrawlReporter(stats, **kwargs)  # type: ignore[arg-type]
