@@ -52,7 +52,9 @@ python -m pip install -r requirements.txt
 - отдельный `HttpTransport`, владеющий сессией, пулом и семафорами.
 - единый `PolitenessManager` для rate limiting и соблюдения `robots.txt`.
 - настраиваемый случайный `jitter` для интервалов между запросами;
-- отдельный `RetryPolicy` с ограниченным exponential backoff (до интеграции).
+- отдельный `RetryPolicy` с ограниченным exponential backoff;
+- `RequestExecutor`, повторно применяющий правила вежливости перед retry.
+- статистика реальных HTTP-попыток, задержек, retry и robots.txt.
 
 Ограничения Day 4 включаются явно, чтобы сохранить поведение предыдущих дней:
 
@@ -63,6 +65,9 @@ crawler = AsyncCrawler(
     min_delay=0.5,
     jitter=0.3,
     user_agent="MyBot/1.0",
+    max_attempts=3,
+    retry_base_delay=0.5,
+    retry_max_delay=10.0,
 )
 ```
 

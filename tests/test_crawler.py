@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from types import TracebackType
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import aiohttp
 import pytest
@@ -115,6 +115,40 @@ async def test_fetch_result_exposes_typed_internal_contract() -> None:
     assert result.outcome is FetchOutcome.SUCCESS
     assert result.content == "typed content"
     assert result.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_fetch_result_uses_configured_retries() -> None:
+    url = "https://example.com/unstable"
+    crawler = AsyncCrawler(
+        max_attempts=3,
+        retry_base_delay=0.5,
+        retry_max_delay=2.0,
+    )
+    sleep = AsyncMock()
+    crawler.retry_policy._sleep = sleep
+
+    async with crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            side_effect=[
+                MockResponseContext(enter_exception=asyncio.TimeoutError()),
+                MockResponseContext(status=503, body="Unavailable"),
+                MockResponseContext(body="recovered"),
+            ],
+        ) as get_mock:
+            result = await crawler.fetch_result(url)
+
+    assert result.outcome is FetchOutcome.SUCCESS
+    assert result.content == "recovered"
+    assert result.attempts == 3
+    assert get_mock.call_count == 3
+    assert sleep.await_args_list == [
+        call(0.5),
+        call(1.0),
+    ]
 
 
 @pytest.mark.asyncio
@@ -298,6 +332,12 @@ async def test_session_is_reused_and_closed() -> None:
         ({"min_delay": float("nan")}, "min_delay"),
         ({"jitter": -1}, "jitter"),
         ({"user_agent": ""}, "user_agent"),
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"retry_base_delay": 0}, "base_delay"),
+        (
+            {"retry_base_delay": 2.0, "retry_max_delay": 1.0},
+            "max_delay",
+        ),
     ],
 )
 def test_invalid_configuration(kwargs: dict, parameter_name: str) -> None:

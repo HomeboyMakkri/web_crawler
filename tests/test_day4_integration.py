@@ -143,3 +143,41 @@ async def test_rate_limiter_is_applied_without_robots_check() -> None:
     assert result == "OK"
     acquire.assert_awaited_once_with("example.com", min_interval=0.75)
     assert crawler.robots_parser is None
+
+
+@pytest.mark.asyncio
+async def test_request_stats_include_robots_fetch_and_retry_attempts() -> None:
+    url = "https://example.com/page"
+    crawler = AsyncCrawler(
+        respect_robots=True,
+        requests_per_second=1_000_000_000.0,
+        max_attempts=2,
+        retry_base_delay=0.001,
+    )
+    crawler.retry_policy._sleep = AsyncMock()
+
+    async with crawler:
+        assert crawler.session is not None
+        with patch.object(
+            crawler.session,
+            "get",
+            side_effect=[
+                ResponseContext("User-agent: *\nAllow: /"),
+                ResponseContext("temporary", status=503),
+                ResponseContext("recovered"),
+            ],
+        ):
+            result = await crawler.fetch_result(url)
+
+    stats = crawler.get_request_stats()
+    assert result.content == "recovered"
+    assert result.attempts == 2
+    assert stats["total_requests"] == 3  # robots.txt + two page attempts
+    assert stats["successful_requests"] == 2
+    assert stats["http_errors"] == 1
+    assert stats["failed_requests"] == 1
+    assert stats["rate_limited_requests"] == 3
+    assert stats["scheduled_retries"] == 1
+    assert stats["robots_network_fetches"] == 1
+    assert stats["robots_cache_hits"] == 1
+    assert stats["robots_allowed"] == 2

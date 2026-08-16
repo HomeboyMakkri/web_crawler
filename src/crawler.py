@@ -16,6 +16,8 @@ from .html_parser import HTMLParser
 from .http_transport import HttpTransport
 from .politeness_manager import PolitenessManager
 from .rate_limiter import RateLimiter
+from .request_executor import RequestExecutor
+from .retry_policy import RetryPolicy
 from .robots_parser import RobotsParser
 from .semaphore_manager import SemaphoreManager
 from .url_filter import URLFilter
@@ -41,6 +43,9 @@ class AsyncCrawler:
         min_delay: float = 0.0,
         jitter: float = 0.0,
         user_agent: str = "AsyncCrawler/1.0",
+        max_attempts: int = 1,
+        retry_base_delay: float = 0.5,
+        retry_max_delay: float = 30.0,
     ) -> None:
         self._transport = HttpTransport(
             max_concurrent=max_concurrent,
@@ -59,6 +64,16 @@ class AsyncCrawler:
             min_delay=min_delay,
             jitter=jitter,
             user_agent=user_agent,
+        )
+        self._retry_policy = RetryPolicy(
+            max_attempts=max_attempts,
+            base_delay=retry_base_delay,
+            max_delay=retry_max_delay,
+        )
+        self._request_executor = RequestExecutor(
+            fetcher=self._transport.fetch,
+            prepare_request=self._politeness.prepare_request,
+            retry_policy=self._retry_policy,
         )
 
         self.visited_urls: set[str] = set()
@@ -96,6 +111,16 @@ class AsyncCrawler:
         """Expose the request-policy component for inspection and testing."""
         return self._politeness
 
+    @property
+    def retry_policy(self) -> RetryPolicy:
+        """Expose retry configuration and statistics."""
+        return self._retry_policy
+
+    @property
+    def request_executor(self) -> RequestExecutor:
+        """Expose the component coordinating policy, transport and retries."""
+        return self._request_executor
+
     def _get_session(self) -> aiohttp.ClientSession:
         """Compatibility adapter for tests and earlier project stages."""
         return self._transport.get_session()
@@ -107,19 +132,43 @@ class AsyncCrawler:
 
     async def fetch_result(self, url: str) -> FetchResult:
         """Fetch one URL using the typed internal request contract."""
-        policy_result = await self._politeness.prepare_request(url)
-        if policy_result is not None:
-            if policy_result.outcome is FetchOutcome.ROBOTS_BLOCKED:
-                self.blocked_urls[url] = (
-                    policy_result.error or "Blocked by robots.txt"
-                )
-            return policy_result
-        return await self._transport.fetch(url)
+        result = await self._request_executor.fetch(url)
+        if result.outcome is FetchOutcome.ROBOTS_BLOCKED:
+            self.blocked_urls[url] = result.error or "Blocked by robots.txt"
+        return result
 
     async def fetch_urls(self, urls: list[str]) -> dict[str, str]:
         """Load all URLs concurrently, bounded by ``max_concurrent``."""
         results = await asyncio.gather(*(self.fetch_url(url) for url in urls))
         return dict(zip(urls, results, strict=True))
+
+    def get_request_stats(self) -> dict[str, int | float]:
+        """Aggregate HTTP, politeness and retry statistics."""
+        transport = self._transport.get_stats()
+        politeness = self._politeness.get_stats()
+        retries = self._retry_policy.get_stats()
+        return {
+            "total_requests": transport["total_requests"],
+            "successful_requests": transport["successful_requests"],
+            "failed_requests": transport["failed_requests"],
+            "http_errors": transport["http_errors"],
+            "network_errors": transport["network_errors"],
+            "timeouts": transport["timeouts"],
+            "current_requests_per_second": transport[
+                "current_requests_per_second"
+            ],
+            "average_request_time": transport["average_request_time"],
+            "rate_limited_requests": politeness["rate_limited_requests"],
+            "delayed_requests": politeness["delayed_requests"],
+            "total_rate_limit_wait": politeness["total_rate_limit_wait"],
+            "average_rate_limit_wait": politeness["average_rate_limit_wait"],
+            "scheduled_retries": retries["scheduled_retries"],
+            "total_backoff_time": retries["total_backoff_time"],
+            "robots_network_fetches": politeness["robots_network_fetches"],
+            "robots_cache_hits": politeness["robots_cache_hits"],
+            "robots_allowed": politeness["robots_allowed"],
+            "robots_blocked": politeness["robots_blocked"],
+        }
 
     async def fetch_and_parse(self, url: str) -> dict[str, Any]:
         """Load one URL and return its structured parsed representation."""

@@ -136,6 +136,70 @@ async def test_network_error_is_returned_as_typed_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stats_count_outcomes_duration_and_recent_request_rate() -> None:
+    clock = MagicMock(
+        side_effect=[
+            0.0,
+            0.1,
+            0.2,
+            0.4,
+            0.5,
+            0.8,
+            0.9,
+            1.3,
+            1.3,
+        ],
+    )
+    transport = HttpTransport(clock=clock)
+    urls = [f"https://example.com/{index}" for index in range(4)]
+
+    async with transport:
+        assert transport.session is not None
+        with patch.object(
+            transport.session,
+            "get",
+            side_effect=[
+                ResponseContext(body="OK"),
+                ResponseContext(body="Unavailable", status=503),
+                ResponseContext(enter_exception=asyncio.TimeoutError()),
+                ResponseContext(
+                    enter_exception=aiohttp.ClientConnectionError("lost")
+                ),
+            ],
+        ):
+            for url in urls:
+                await transport.fetch(url)
+
+        stats = transport.get_stats()
+
+    assert stats == {
+        "total_requests": 4,
+        "successful_requests": 1,
+        "failed_requests": 3,
+        "http_errors": 1,
+        "network_errors": 1,
+        "timeouts": 1,
+        "current_requests_per_second": 2.0,
+        "average_request_time": pytest.approx(0.25),
+    }
+
+
+def test_stats_are_zero_before_first_request() -> None:
+    transport = HttpTransport(clock=lambda: 10.0)
+
+    assert transport.get_stats() == {
+        "total_requests": 0,
+        "successful_requests": 0,
+        "failed_requests": 0,
+        "http_errors": 0,
+        "network_errors": 0,
+        "timeouts": 0,
+        "current_requests_per_second": 0.0,
+        "average_request_time": 0.0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_global_concurrency_is_enforced_around_network_operation() -> None:
     release = asyncio.Event()
     transport = HttpTransport(max_concurrent=2, limit_per_host=2)

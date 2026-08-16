@@ -18,6 +18,21 @@ async def test_disabled_policy_allows_request_without_fetching_robots() -> None:
     assert manager.robots_parser is None
     fetcher.assert_not_awaited()
 
+    assert manager.get_stats() == {
+        "min_delay": 0.0,
+        "jitter": 0.0,
+        "rate_limiting_enabled": False,
+        "rate_limited_requests": 0,
+        "delayed_requests": 0,
+        "total_rate_limit_wait": 0.0,
+        "average_rate_limit_wait": 0.0,
+        "robots_enabled": False,
+        "robots_network_fetches": 0,
+        "robots_cache_hits": 0,
+        "robots_allowed": 0,
+        "robots_blocked": 0,
+    }
+
 
 @pytest.mark.asyncio
 async def test_rate_limit_uses_domain_and_configured_minimum_delay() -> None:
@@ -37,6 +52,26 @@ async def test_rate_limit_uses_domain_and_configured_minimum_delay() -> None:
         "docs.example.com",
         min_interval=0.75,
     )
+
+
+@pytest.mark.asyncio
+async def test_stats_include_real_rate_limiter_activity() -> None:
+    manager = PolitenessManager(
+        fetcher=AsyncMock(),
+        requests_per_second=2.0,
+        min_delay=0.75,
+        jitter=0.25,
+    )
+
+    await manager.prepare_request("https://example.com/page")
+
+    stats = manager.get_stats()
+    assert stats["min_delay"] == 0.75
+    assert stats["jitter"] == 0.25
+    assert stats["rate_limiting_enabled"] is True
+    assert stats["rate_limited_requests"] == 1
+    assert stats["delayed_requests"] == 0
+    assert stats["total_rate_limit_wait"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -188,6 +223,31 @@ async def test_robots_rules_are_reused_for_same_origin() -> None:
     fetcher.assert_awaited_once_with("https://example.com/robots.txt")
     assert manager.robots_parser is not None
     assert manager.robots_parser.get_stats()["cache_hits"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stats_aggregate_robots_cache_and_permission_checks() -> None:
+    fetcher = AsyncMock(
+        side_effect=lambda url: FetchResult.success(
+            url,
+            "User-agent: *\nDisallow: /private",
+        ),
+    )
+    manager = PolitenessManager(fetcher=fetcher, respect_robots=True)
+    assert manager.rate_limiter is not None
+
+    with patch.object(manager.rate_limiter, "acquire", AsyncMock()):
+        allowed = await manager.prepare_request("https://example.com/public")
+        blocked = await manager.prepare_request("https://example.com/private")
+
+    assert allowed is None
+    assert blocked is not None
+    stats = manager.get_stats()
+    assert stats["robots_enabled"] is True
+    assert stats["robots_network_fetches"] == 1
+    assert stats["robots_cache_hits"] == 1
+    assert stats["robots_allowed"] == 1
+    assert stats["robots_blocked"] == 1
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ import math
 import random
 from collections.abc import Awaitable, Callable
 from numbers import Real
+from typing import TypedDict
 
 from .fetch_result import FetchResult
 from .rate_limiter import RateLimiter
@@ -16,6 +17,21 @@ logger = logging.getLogger(__name__)
 
 Fetcher = Callable[[str], Awaitable[FetchResult]]
 RandomSource = Callable[[], float]
+
+
+class PolitenessStats(TypedDict):
+    min_delay: float
+    jitter: float
+    rate_limiting_enabled: bool
+    rate_limited_requests: int
+    delayed_requests: int
+    total_rate_limit_wait: float
+    average_rate_limit_wait: float
+    robots_enabled: bool
+    robots_network_fetches: int
+    robots_cache_hits: int
+    robots_allowed: int
+    robots_blocked: int
 
 
 class PolitenessManager:
@@ -88,6 +104,49 @@ class PolitenessManager:
     @property
     def robots_parser(self) -> RobotsParser | None:
         return self._robots_parser
+
+    def get_stats(self) -> PolitenessStats:
+        """Aggregate rate-limiter and robots.txt policy statistics."""
+        rate_stats = (
+            self._rate_limiter.get_stats()
+            if self._rate_limiter is not None
+            else None
+        )
+        robots_stats = (
+            self._robots_parser.get_stats()
+            if self._robots_parser is not None
+            else None
+        )
+        return {
+            "min_delay": self._min_delay,
+            "jitter": self._jitter,
+            "rate_limiting_enabled": self._rate_limiter is not None,
+            "rate_limited_requests": (
+                rate_stats["total_requests"] if rate_stats is not None else 0
+            ),
+            "delayed_requests": (
+                rate_stats["delayed_requests"] if rate_stats is not None else 0
+            ),
+            "total_rate_limit_wait": (
+                rate_stats["total_wait_time"] if rate_stats is not None else 0.0
+            ),
+            "average_rate_limit_wait": (
+                rate_stats["average_wait_time"] if rate_stats is not None else 0.0
+            ),
+            "robots_enabled": self._robots_parser is not None,
+            "robots_network_fetches": (
+                robots_stats["network_fetches"] if robots_stats is not None else 0
+            ),
+            "robots_cache_hits": (
+                robots_stats["cache_hits"] if robots_stats is not None else 0
+            ),
+            "robots_allowed": (
+                robots_stats["allowed_checks"] if robots_stats is not None else 0
+            ),
+            "robots_blocked": (
+                robots_stats["blocked_checks"] if robots_stats is not None else 0
+            ),
+        }
 
     async def prepare_request(self, url: str) -> FetchResult | None:
         """Wait until ``url`` may be fetched or return a policy rejection."""
