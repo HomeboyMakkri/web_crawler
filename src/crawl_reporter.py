@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from numbers import Real
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
 
 CrawlStats = dict[str, int | float]
-RequestStats = dict[str, int | float]
+RequestStats = dict[str, Any]
 
 
 class CrawlReporter:
@@ -84,12 +85,36 @@ class CrawlReporter:
         if request_stats is None:
             return crawl_message
 
+        error_counts = CrawlReporter._format_error_counts(
+            request_stats.get("errors_by_type"),
+        )
+        permanent_urls = request_stats.get("permanent_error_urls", [])
+        permanent_count = (
+            len(permanent_urls)
+            if isinstance(permanent_urls, (list, tuple, set))
+            else 0
+        )
+
         return (
             f"{crawl_message} | "
             f"HTTP-запросов {request_stats.get('total_requests', 0)} "
             f"({request_stats.get('current_requests_per_second', 0.0):.2f}/с) | "
             f"ср. задержка "
             f"{request_stats.get('average_rate_limit_wait', 0.0):.3f} с | "
-            f"retry {request_stats.get('scheduled_retries', 0)} | "
+            f"retry {request_stats.get('scheduled_retries', 0)} "
+            f"(успешно {request_stats.get('successful_retries', 0)}, "
+            f"ср. ожидание "
+            f"{request_stats.get('average_retry_wait', 0.0):.3f} с) | "
+            f"типы ошибок {error_counts} | "
+            f"постоянных URL {permanent_count} | "
             f"robots.txt блокировок {request_stats.get('robots_blocked', 0)}"
+        )
+
+    @staticmethod
+    def _format_error_counts(value: object) -> str:
+        if not isinstance(value, Mapping) or not value:
+            return "нет"
+        return ", ".join(
+            f"{name}={count}"
+            for name, count in sorted(value.items(), key=lambda item: str(item[0]))
         )

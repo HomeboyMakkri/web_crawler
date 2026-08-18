@@ -40,6 +40,9 @@ class HttpTransport:
         *,
         connect_timeout: float = 5.0,
         read_timeout: float = 15.0,
+        total_timeout: float = 30.0,
+        timeout_multiplier: float = 2.0,
+        max_timeout: float = 120.0,
         limit_per_host: int | None = None,
         user_agent: str = "AsyncCrawler/1.0",
         clock: Clock = time.perf_counter,
@@ -56,6 +59,26 @@ class HttpTransport:
             read_timeout,
             "read_timeout",
         )
+        self._total_timeout = self._validate_positive_number(
+            total_timeout,
+            "total_timeout",
+        )
+        self._timeout_multiplier = self._validate_timeout_multiplier(
+            timeout_multiplier,
+        )
+        self._max_timeout = self._validate_positive_number(
+            max_timeout,
+            "max_timeout",
+        )
+        largest_initial_timeout = max(
+            self._connect_timeout,
+            self._read_timeout,
+            self._total_timeout,
+        )
+        if self._max_timeout < largest_initial_timeout:
+            raise ValueError(
+                "max_timeout must be greater than or equal to initial timeouts",
+            )
         self._limit_per_host = (
             self._max_concurrent
             if limit_per_host is None
@@ -90,10 +113,12 @@ class HttpTransport:
     def semaphore_manager(self) -> SemaphoreManager:
         return self._semaphore_manager
 
-    async def fetch(self, url: str) -> FetchResult:
+    async def fetch(self, url: str, *, attempt: int = 1) -> FetchResult:
         """Fetch one HTTP(S) URL using the shared session and connection pool."""
         # Validate before allocating a session or entering timing statistics.
         self._semaphore_manager.get_domain(url)
+        validated_attempt = self._validate_positive_int(attempt, "attempt")
+        request_timeout = self.timeout_for_attempt(validated_attempt)
         session = self.get_session()
 
         async with self._semaphore_manager.request_slot(url):
@@ -101,7 +126,7 @@ class HttpTransport:
             self._record_request_start(started_at)
             logger.info("Fetching URL: %s", url)
             try:
-                async with session.get(url) as response:
+                async with session.get(url, timeout=request_timeout) as response:
                     content = await response.text()
                     status = response.status
             except asyncio.TimeoutError:
@@ -109,6 +134,7 @@ class HttpTransport:
                 return self._record_result(
                     FetchResult.timeout(
                         url,
+                        attempts=validated_attempt,
                         elapsed_seconds=self._elapsed_since(started_at),
                     )
                 )
@@ -120,6 +146,7 @@ class HttpTransport:
                             url,
                             error.status,
                             error=str(error) or f"HTTP {error.status}",
+                            attempts=validated_attempt,
                             elapsed_seconds=self._elapsed_since(started_at),
                         )
                     )
@@ -127,6 +154,7 @@ class HttpTransport:
                     FetchResult.network_error(
                         url,
                         f"{type(error).__name__}: {error}",
+                        attempts=validated_attempt,
                         elapsed_seconds=self._elapsed_since(started_at),
                     )
                 )
@@ -141,6 +169,7 @@ class HttpTransport:
                     FetchResult.network_error(
                         url,
                         f"{type(error).__name__}: {error}",
+                        attempts=validated_attempt,
                         elapsed_seconds=self._elapsed_since(started_at),
                     )
                 )
@@ -153,6 +182,7 @@ class HttpTransport:
                     url,
                     status,
                     content=content,
+                    attempts=validated_attempt,
                     elapsed_seconds=elapsed,
                 )
             )
@@ -168,6 +198,7 @@ class HttpTransport:
                 url,
                 content,
                 status_code=status,
+                attempts=validated_attempt,
                 elapsed_seconds=elapsed,
             )
         )
@@ -200,7 +231,7 @@ class HttpTransport:
         """Create the pooled session lazily and reuse it between requests."""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(
-                total=None,
+                total=self._total_timeout,
                 connect=self._connect_timeout,
                 sock_read=self._read_timeout,
             )
@@ -215,6 +246,16 @@ class HttpTransport:
                 headers={"User-Agent": self._user_agent},
             )
         return self._session
+
+    def timeout_for_attempt(self, attempt: int) -> aiohttp.ClientTimeout:
+        """Build the bounded timeout used by one logical request attempt."""
+        validated_attempt = self._validate_positive_int(attempt, "attempt")
+        exponent = validated_attempt - 1
+        return aiohttp.ClientTimeout(
+            total=self._grow_timeout(self._total_timeout, exponent),
+            connect=self._grow_timeout(self._connect_timeout, exponent),
+            sock_read=self._grow_timeout(self._read_timeout, exponent),
+        )
 
     async def close(self) -> None:
         """Close the session; repeated calls are harmless."""
@@ -254,6 +295,18 @@ class HttpTransport:
         while self._request_started_at and self._request_started_at[0] <= cutoff:
             self._request_started_at.popleft()
 
+    def _grow_timeout(self, initial: float, exponent: int) -> float:
+        logarithmic_timeout = math.log(initial) + exponent * math.log(
+            self._timeout_multiplier,
+        )
+        if logarithmic_timeout >= math.log(self._max_timeout):
+            return self._max_timeout
+        try:
+            timeout = initial * (self._timeout_multiplier**exponent)
+        except OverflowError:
+            timeout = math.exp(logarithmic_timeout)
+        return min(timeout, self._max_timeout)
+
     @staticmethod
     def _validate_positive_int(value: int, name: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -270,6 +323,16 @@ class HttpTransport:
         ):
             raise ValueError(f"{name} must be a positive finite number")
         return float(value)
+
+    @staticmethod
+    def _validate_timeout_multiplier(value: float) -> float:
+        validated = HttpTransport._validate_positive_number(
+            value,
+            "timeout_multiplier",
+        )
+        if validated < 1.0:
+            raise ValueError("timeout_multiplier must be greater than or equal to 1")
+        return validated
 
     @staticmethod
     def _validate_non_empty_string(value: str, name: str) -> str:

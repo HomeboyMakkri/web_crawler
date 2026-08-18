@@ -8,7 +8,7 @@ from .errors import CrawlerError, classify_fetch_result
 from .fetch_result import FetchResult
 from .retry_strategy import RetryStrategy
 
-Fetcher = Callable[[str], Awaitable[FetchResult]]
+Fetcher = Callable[..., Awaitable[FetchResult]]
 RequestPreparer = Callable[[str], Awaitable[FetchResult | None]]
 Clock = Callable[[], float]
 
@@ -58,7 +58,8 @@ class RequestExecutor:
                 self._validate_result(policy_result, "prepare_request")
                 return policy_result
 
-            result = await self._fetcher(url)
+            attempt = attempts_made + 1
+            result = await self._fetcher(url, attempt=attempt)
             self._validate_result(result, "fetcher")
             attempts_made += 1
 

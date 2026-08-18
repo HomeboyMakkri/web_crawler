@@ -9,6 +9,8 @@ import pytest
 
 from src.fetch_result import FetchOutcome
 from src.http_transport import HttpTransport
+from src.request_executor import RequestExecutor
+from src.retry_strategy import RetryStrategy
 
 
 class ResponseContext:
@@ -214,7 +216,7 @@ async def test_global_concurrency_is_enforced_around_network_operation() -> None
         with patch.object(
             transport.session,
             "get",
-            side_effect=lambda url: ResponseContext(release=release),
+            side_effect=lambda url, **kwargs: ResponseContext(release=release),
         ):
             tasks = [asyncio.create_task(transport.fetch(url)) for url in urls]
             await wait_until(
@@ -257,6 +259,13 @@ async def test_close_is_idempotent() -> None:
         ({"max_concurrent": 0}, "max_concurrent"),
         ({"connect_timeout": 0}, "connect_timeout"),
         ({"read_timeout": float("nan")}, "read_timeout"),
+        ({"total_timeout": 0}, "total_timeout"),
+        ({"timeout_multiplier": 0.5}, "timeout_multiplier"),
+        ({"max_timeout": 0}, "max_timeout"),
+        (
+            {"total_timeout": 30.0, "max_timeout": 20.0},
+            "max_timeout",
+        ),
         ({"limit_per_host": True}, "limit_per_host"),
         ({"user_agent": ""}, "user_agent"),
         ({"clock": "not callable"}, "clock"),
@@ -265,3 +274,95 @@ async def test_close_is_idempotent() -> None:
 def test_invalid_configuration_is_rejected(kwargs: dict, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         HttpTransport(**kwargs)
+
+
+def test_timeout_grows_for_each_attempt_and_is_capped() -> None:
+    transport = HttpTransport(
+        connect_timeout=2.0,
+        read_timeout=5.0,
+        total_timeout=10.0,
+        timeout_multiplier=2.0,
+        max_timeout=25.0,
+    )
+
+    first = transport.timeout_for_attempt(1)
+    second = transport.timeout_for_attempt(2)
+    fourth = transport.timeout_for_attempt(4)
+
+    assert (first.connect, first.sock_read, first.total) == (2.0, 5.0, 10.0)
+    assert (second.connect, second.sock_read, second.total) == (4.0, 10.0, 20.0)
+    assert (fourth.connect, fourth.sock_read, fourth.total) == (16.0, 25.0, 25.0)
+
+
+@pytest.mark.parametrize("attempt", [0, -1, True, 1.5])
+def test_timeout_rejects_invalid_attempt(attempt: object) -> None:
+    transport = HttpTransport()
+
+    with pytest.raises(ValueError, match="attempt"):
+        transport.timeout_for_attempt(attempt)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_timeout_for_specific_attempt() -> None:
+    transport = HttpTransport(
+        connect_timeout=2.0,
+        read_timeout=4.0,
+        total_timeout=8.0,
+        timeout_multiplier=2.0,
+        max_timeout=20.0,
+    )
+
+    async with transport:
+        assert transport.session is not None
+        with patch.object(
+            transport.session,
+            "get",
+            return_value=ResponseContext(),
+        ) as get_mock:
+            result = await transport.fetch("https://example.com", attempt=3)
+
+    timeout = get_mock.call_args.kwargs["timeout"]
+    assert isinstance(timeout, aiohttp.ClientTimeout)
+    assert (timeout.connect, timeout.sock_read, timeout.total) == (8.0, 16.0, 20.0)
+    assert result.attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_asyncio_timeout_is_classified_and_retried_with_larger_timeout() -> None:
+    url = "https://example.com/slow"
+    transport = HttpTransport(
+        connect_timeout=1.0,
+        read_timeout=2.0,
+        total_timeout=3.0,
+        timeout_multiplier=2.0,
+        max_timeout=10.0,
+    )
+    strategy = RetryStrategy(max_retries=1, sleep=AsyncMock())
+    executor = RequestExecutor(
+        fetcher=transport.fetch,
+        prepare_request=AsyncMock(return_value=None),
+        retry_strategy=strategy,
+    )
+
+    async with transport:
+        assert transport.session is not None
+        with patch.object(
+            transport.session,
+            "get",
+            side_effect=[
+                ResponseContext(enter_exception=asyncio.TimeoutError()),
+                ResponseContext(body="recovered"),
+            ],
+        ) as get_mock:
+            result = await executor.fetch(url)
+
+    assert result.is_success
+    assert result.content == "recovered"
+    assert result.attempts == 2
+    assert strategy.get_stats()["errors_by_type"] == {"TransientError": 1}
+    assert [
+        request.kwargs["timeout"].total
+        for request in get_mock.call_args_list
+    ] == [3.0, 6.0]
+    assert get_mock.call_args_list[0].args == (url,)
+    assert get_mock.call_args_list[1].args == (url,)

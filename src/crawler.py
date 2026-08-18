@@ -11,6 +11,7 @@ import aiohttp
 
 from .crawl_reporter import CrawlReporter
 from .crawler_queue import CrawlerQueue
+from .errors import ParseError, classify_fetch_result
 from .fetch_result import FetchOutcome, FetchResult
 from .html_parser import HTMLParser
 from .http_transport import HttpTransport
@@ -35,6 +36,9 @@ class AsyncCrawler:
         *,
         connect_timeout: float = 5.0,
         read_timeout: float = 15.0,
+        total_timeout: float = 30.0,
+        timeout_multiplier: float = 2.0,
+        max_timeout: float = 120.0,
         limit_per_host: int | None = None,
         filter_external_links: bool = False,
         max_depth: int = 2,
@@ -51,6 +55,9 @@ class AsyncCrawler:
             max_concurrent=max_concurrent,
             connect_timeout=connect_timeout,
             read_timeout=read_timeout,
+            total_timeout=total_timeout,
+            timeout_multiplier=timeout_multiplier,
+            max_timeout=max_timeout,
             limit_per_host=limit_per_host,
             user_agent=user_agent,
         )
@@ -84,6 +91,9 @@ class AsyncCrawler:
         self.processed_urls: dict[str, dict[str, Any]] = {}
         self.failed_urls: dict[str, str] = {}
         self.blocked_urls: dict[str, str] = {}
+        self.final_errors: dict[str, dict[str, object]] = {}
+        self._parse_errors = 0
+        self._parse_error_urls: set[str] = set()
         self.url_depths: dict[str, int] = {}
         self._crawl_queue: CrawlerQueue | None = None
         self._crawl_running = False
@@ -139,6 +149,10 @@ class AsyncCrawler:
         result = await self._request_executor.fetch(url)
         if result.outcome is FetchOutcome.ROBOTS_BLOCKED:
             self.blocked_urls[url] = result.error or "Blocked by robots.txt"
+        elif result.is_success:
+            self.final_errors.pop(url, None)
+        else:
+            self.final_errors[url] = self._to_error_record(result)
         return result
 
     async def fetch_urls(self, urls: list[str]) -> dict[str, str]:
@@ -146,11 +160,11 @@ class AsyncCrawler:
         results = await asyncio.gather(*(self.fetch_url(url) for url in urls))
         return dict(zip(urls, results, strict=True))
 
-    def get_request_stats(self) -> dict[str, int | float]:
+    def get_request_stats(self) -> dict[str, object]:
         """Aggregate HTTP, politeness and retry statistics."""
         transport = self._transport.get_stats()
         politeness = self._politeness.get_stats()
-        retries = self._retry_strategy.get_stats()
+        errors = self._combined_error_stats()
         return {
             "total_requests": transport["total_requests"],
             "successful_requests": transport["successful_requests"],
@@ -166,12 +180,28 @@ class AsyncCrawler:
             "delayed_requests": politeness["delayed_requests"],
             "total_rate_limit_wait": politeness["total_rate_limit_wait"],
             "average_rate_limit_wait": politeness["average_rate_limit_wait"],
-            "scheduled_retries": retries["scheduled_retries"],
-            "total_backoff_time": retries["total_backoff_time"],
+            "scheduled_retries": errors["scheduled_retries"],
+            "total_backoff_time": errors["total_backoff_time"],
+            "errors_by_type": errors["errors_by_type"],
+            "successful_retries": errors["successful_retries"],
+            "average_retry_wait": errors["average_retry_wait"],
+            "permanent_error_urls": errors["permanent_error_urls"],
             "robots_network_fetches": politeness["robots_network_fetches"],
             "robots_cache_hits": politeness["robots_cache_hits"],
             "robots_allowed": politeness["robots_allowed"],
             "robots_blocked": politeness["robots_blocked"],
+        }
+
+    def get_error_stats(self) -> dict[str, object]:
+        """Return retry counters and the latest final failures by URL."""
+        errors = self._combined_error_stats()
+        return {
+            **errors,
+            "final_errors_count": len(self.final_errors),
+            "final_errors": {
+                url: dict(error)
+                for url, error in self.final_errors.items()
+            },
         }
 
     async def fetch_and_parse(self, url: str) -> dict[str, Any]:
@@ -186,7 +216,11 @@ class AsyncCrawler:
         if html is None:
             raise RuntimeError("successful FetchResult must contain HTML content")
 
-        result = await self._parser.parse_html(html, url)
+        try:
+            result = await self._parser.parse_html(html, url)
+        except ParseError as error:
+            self._record_parse_error(error)
+            raise
         logger.info(
             "Successfully parsed: %s (links=%d, text=%d chars)",
             url,
@@ -402,6 +436,7 @@ class AsyncCrawler:
         self.processed_urls.clear()
         self.failed_urls.clear()
         self.blocked_urls.clear()
+        self.final_errors.clear()
         self.url_depths.clear()
         self._crawl_queue = None
         self._crawl_started_at = None
@@ -453,3 +488,48 @@ class AsyncCrawler:
 
         error_type = (result.error or "ClientError").partition(":")[0]
         return f"Error: ClientError {error_type}"
+
+    @staticmethod
+    def _to_error_record(result: FetchResult) -> dict[str, object]:
+        """Convert a terminal fetch failure to a JSON-friendly record."""
+        error = classify_fetch_result(result)
+        if error is None:
+            raise RuntimeError("final error record requires a failed FetchResult")
+        return {
+            "url": result.url,
+            "error_type": type(error).__name__,
+            "outcome": result.outcome.value,
+            "status_code": result.status_code,
+            "message": result.error or result.outcome.value,
+            "attempts": result.attempts,
+            "elapsed_seconds": result.elapsed_seconds,
+        }
+
+    def _record_parse_error(self, error: ParseError) -> None:
+        self._parse_errors += 1
+        self._parse_error_urls.add(error.url)
+        self.final_errors[error.url] = {
+            "url": error.url,
+            "error_type": type(error).__name__,
+            "outcome": "parse_error",
+            "status_code": None,
+            "message": str(error),
+            "attempts": error.attempt,
+            "elapsed_seconds": 0.0,
+        }
+
+    def _combined_error_stats(self) -> dict[str, object]:
+        retries = self._retry_strategy.get_stats()
+        errors_by_type = dict(retries["errors_by_type"])
+        if self._parse_errors:
+            errors_by_type["ParseError"] = (
+                errors_by_type.get("ParseError", 0) + self._parse_errors
+            )
+        permanent_urls = sorted(
+            set(retries["permanent_error_urls"]) | self._parse_error_urls,
+        )
+        return {
+            **retries,
+            "errors_by_type": errors_by_type,
+            "permanent_error_urls": permanent_urls,
+        }

@@ -54,8 +54,21 @@ python -m pip install -r requirements.txt
 - настраиваемый случайный `jitter` для интервалов между запросами;
 - единый `RetryStrategy` с классификацией ошибок и exponential backoff;
 - `RequestExecutor`, повторно применяющий правила вежливости перед каждой попыткой.
+- увеличиваемые для каждой попытки HTTP-таймауты с верхней границей;
+- типизированные `ParseError` без автоматического retry и общая статистика ошибок;
 - статистика реальных HTTP-попыток, задержек, retry и robots.txt.
 - расширенный live-отчёт: страницы/с, запросы/с, задержки и блокировки.
+
+## Возможности Day 5
+
+- классификация временных, сетевых, постоянных и parsing-ошибок;
+- единый `RetryStrategy` с ограничениями по типам ошибок;
+- exponential backoff и увеличиваемые таймауты отдельных попыток;
+- retry для timeout, HTTP 429 и HTTP 5xx без retry для 403/404;
+- учёт типов ошибок, успешных retry и среднего времени ожидания;
+- список URL с постоянными ошибками и структурированные `final_errors`;
+- асинхронное сохранение отдельного error report через `aiofiles`;
+- расширенный `CrawlReporter` со статистикой ошибок и retry.
 
 Ограничения Day 4 включаются явно, чтобы сохранить поведение предыдущих дней:
 
@@ -66,6 +79,9 @@ crawler = AsyncCrawler(
     min_delay=0.5,
     jitter=0.3,
     user_agent="MyBot/1.0",
+    total_timeout=30.0,
+    timeout_multiplier=2.0,
+    max_timeout=120.0,
     max_attempts=3,
     retry_base_delay=0.5,
     retry_max_delay=10.0,
@@ -104,8 +120,24 @@ python -m src.day4_demo
 Демонстрация сама запускает временный локальный сайт и не требует доступа к
 интернету.
 
+Day 5 — локальные endpoints для восстанавливающегося HTTP 429, постоянных
+HTTP 503/404 и timeout с итоговым JSON-отчётом:
+
+```bash
+python -m src.day5_demo
+```
+
+Результат будет записан в `day5_error_report.json`. Доступ к интернету не
+требуется, но WSL должен разрешать соединения с `127.0.0.1`.
+
 ## Тесты
 
 ```bash
 python -m pytest -q
+```
+
+Полный локальный socket-сценарий Day 5 можно запустить отдельно:
+
+```bash
+python -m pytest -q tests/test_day5_demo_socket.py
 ```

@@ -29,6 +29,7 @@ class RetryStrategyStats(TypedDict):
     non_retryable_failures: int
     total_backoff_time: float
     average_backoff_time: float
+    average_retry_wait: float
     permanent_error_urls: list[str]
 
 
@@ -186,6 +187,7 @@ class RetryStrategy:
             "non_retryable_failures": self._non_retryable_failures,
             "total_backoff_time": self._total_backoff_time,
             "average_backoff_time": average_backoff,
+            "average_retry_wait": average_backoff,
             "permanent_error_urls": sorted(self._permanent_error_urls),
         }
 

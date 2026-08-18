@@ -92,7 +92,7 @@ class NetworkError(CrawlerError):
     retryable = True
 
 
-class ParseError(CrawlerError):
+class ParseError(PermanentError):
     """An HTML parsing failure, which is permanent by default."""
 
 

@@ -55,9 +55,9 @@ async def test_allowed_request_obeys_robots_delay_before_http_fetch() -> None:
             result = await crawler.fetch_url(url)
 
     assert result == "<html>allowed</html>"
-    assert get_mock.call_args_list == [
-        call("https://example.com/robots.txt"),
-        call(url),
+    assert [request.args for request in get_mock.call_args_list] == [
+        ("https://example.com/robots.txt",),
+        (url,),
     ]
     assert acquire.await_args_list == [
         call("example.com", min_interval=0.5),
@@ -88,7 +88,9 @@ async def test_robots_blocked_url_is_not_requested() -> None:
 
     assert result == f"Error: Blocked by robots.txt for {url}"
     assert crawler.blocked_urls == {url: "Blocked by robots.txt"}
-    assert get_mock.call_args_list == [call("https://example.com/robots.txt")]
+    assert [request.args for request in get_mock.call_args_list] == [
+        ("https://example.com/robots.txt",),
+    ]
     acquire.assert_awaited_once_with("example.com", min_interval=0.0)
 
 

@@ -3,3 +3,6 @@ addopts = "-ra"
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "socket: tests that bind a local TCP socket",
+]

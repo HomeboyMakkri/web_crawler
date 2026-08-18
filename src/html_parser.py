@@ -8,6 +8,8 @@ from urllib.parse import urldefrag, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
+from .errors import ParseError
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,16 @@ class HTMLParser:
 
     async def parse_html(self, html: str, url: str) -> dict[str, Any]:
         """Parse HTML and return crawler-friendly structured data."""
-        return self._parse_html(html, url)
+        try:
+            return self._parse_html(html, url)
+        except ParseError:
+            raise
+        except Exception as error:
+            logger.exception("Unexpected parsing error for %s", url)
+            raise ParseError(
+                f"{type(error).__name__}: {error}",
+                url=url,
+            ) from error
 
     def _parse_html(self, html: str, url: str) -> dict[str, Any]:
         result = self.empty_result(url)

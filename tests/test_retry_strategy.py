@@ -24,6 +24,7 @@ def empty_stats() -> dict[str, object]:
         "non_retryable_failures": 0,
         "total_backoff_time": 0.0,
         "average_backoff_time": 0.0,
+        "average_retry_wait": 0.0,
         "permanent_error_urls": [],
     }
 
@@ -87,6 +88,7 @@ async def test_transient_errors_back_off_until_success(
         "non_retryable_failures": 0,
         "total_backoff_time": 1.5,
         "average_backoff_time": 0.75,
+        "average_retry_wait": 0.75,
         "permanent_error_urls": [],
     }
 

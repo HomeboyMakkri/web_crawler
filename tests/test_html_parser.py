@@ -3,6 +3,7 @@ import logging
 from bs4 import BeautifulSoup
 import pytest
 
+from src.errors import ParseError
 from src.html_parser import HTMLParser
 
 
@@ -208,3 +209,21 @@ async def test_parse_valid_html_does_not_log_warning(
 
     assert result["text"] == "Test"
     assert "Invalid CSS selector" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_parser_failure_is_converted_to_parse_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parser = HTMLParser()
+
+    def crash(html: str, url: str) -> dict[str, object]:
+        raise RuntimeError("parser implementation crashed")
+
+    monkeypatch.setattr(parser, "_parse_html", crash)
+
+    with pytest.raises(ParseError, match="RuntimeError") as raised:
+        await parser.parse_html("<html></html>", "https://example.com/page")
+
+    assert raised.value.url == "https://example.com/page"
+    assert isinstance(raised.value.__cause__, RuntimeError)

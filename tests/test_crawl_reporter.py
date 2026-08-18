@@ -24,12 +24,19 @@ def stats() -> dict[str, int | float]:
     }
 
 
-def request_stats() -> dict[str, int | float]:
+def request_stats() -> dict[str, object]:
     return {
         "total_requests": 8,
         "current_requests_per_second": 2.5,
         "average_rate_limit_wait": 0.375,
         "scheduled_retries": 2,
+        "successful_retries": 1,
+        "average_retry_wait": 0.75,
+        "errors_by_type": {
+            "TransientError": 3,
+            "PermanentError": 1,
+        },
+        "permanent_error_urls": ["https://example.com/missing"],
         "robots_blocked": 1,
     }
 
@@ -59,8 +66,10 @@ def test_report_once_includes_request_and_politeness_statistics() -> None:
     assert messages == [
         "Прогресс: обработано 3/5 | успешно 2 | в очереди 1 | "
         "активно 1 | ошибок 1 | заблокировано 1 | скорость 2.00 стр/с | "
-        "HTTP-запросов 8 (2.50/с) | ср. задержка 0.375 с | retry 2 | "
-        "robots.txt блокировок 1"
+        "HTTP-запросов 8 (2.50/с) | ср. задержка 0.375 с | retry 2 "
+        "(успешно 1, ср. ожидание 0.750 с) | "
+        "типы ошибок PermanentError=1, TransientError=3 | "
+        "постоянных URL 1 | robots.txt блокировок 1"
     ]
 
 
@@ -69,7 +78,9 @@ def test_request_statistics_use_safe_defaults_for_missing_fields() -> None:
 
     assert "HTTP-запросов 0 (0.00/с)" in message
     assert "ср. задержка 0.000 с" in message
-    assert "retry 0" in message
+    assert "retry 0 (успешно 0, ср. ожидание 0.000 с)" in message
+    assert "типы ошибок нет" in message
+    assert "постоянных URL 0" in message
     assert "robots.txt блокировок 0" in message
 
 

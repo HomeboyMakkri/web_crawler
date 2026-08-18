@@ -39,6 +39,10 @@ def test_crawler_aggregates_request_statistics_from_components() -> None:
     retry_stats = {
         "scheduled_retries": 2,
         "total_backoff_time": 1.5,
+        "errors_by_type": {"TransientError": 2, "PermanentError": 1},
+        "successful_retries": 1,
+        "average_retry_wait": 0.75,
+        "permanent_error_urls": ["https://example.com/missing"],
     }
 
     with (
@@ -71,6 +75,10 @@ def test_crawler_aggregates_request_statistics_from_components() -> None:
         "average_rate_limit_wait": 1 / 3,
         "scheduled_retries": 2,
         "total_backoff_time": 1.5,
+        "errors_by_type": {"TransientError": 2, "PermanentError": 1},
+        "successful_retries": 1,
+        "average_retry_wait": 0.75,
+        "permanent_error_urls": ["https://example.com/missing"],
         "robots_network_fetches": 1,
         "robots_cache_hits": 4,
         "robots_allowed": 5,
@@ -96,6 +104,10 @@ def test_crawler_request_stats_are_zero_before_requests() -> None:
         "average_rate_limit_wait": 0.0,
         "scheduled_retries": 0,
         "total_backoff_time": 0.0,
+        "errors_by_type": {},
+        "successful_retries": 0,
+        "average_retry_wait": 0.0,
+        "permanent_error_urls": [],
         "robots_network_fetches": 0,
         "robots_cache_hits": 0,
         "robots_allowed": 0,

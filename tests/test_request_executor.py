@@ -41,7 +41,7 @@ async def test_success_is_returned_after_one_attempt() -> None:
     assert result.attempts == 1
     assert result.elapsed_seconds == 0.0
     prepare_request.assert_awaited_once_with(URL)
-    fetcher.assert_awaited_once_with(URL)
+    fetcher.assert_awaited_once_with(URL, attempt=1)
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,11 @@ async def test_retryable_failures_are_retried_until_success() -> None:
     assert result.elapsed_seconds == pytest.approx(1.5)
     assert fake_time.sleeps == [0.5, 1.0]
     assert prepare_request.await_args_list == [call(URL), call(URL), call(URL)]
-    assert fetcher.await_count == 3
+    assert fetcher.await_args_list == [
+        call(URL, attempt=1),
+        call(URL, attempt=2),
+        call(URL, attempt=3),
+    ]
     stats = strategy.get_stats()
     assert stats["scheduled_retries"] == 2
     assert stats["successful_retries"] == 1
@@ -123,7 +127,7 @@ async def test_non_retryable_failure_stops_immediately() -> None:
     assert result.outcome is FetchOutcome.HTTP_ERROR
     assert result.status_code == 404
     assert result.attempts == 1
-    fetcher.assert_awaited_once_with(URL)
+    fetcher.assert_awaited_once_with(URL, attempt=1)
     sleep.assert_not_awaited()
     stats = strategy.get_stats()
     assert stats["errors_by_type"] == {"PermanentError": 1}
@@ -196,7 +200,7 @@ async def test_policy_is_checked_again_before_every_retry() -> None:
     assert result.outcome is FetchOutcome.ROBOTS_BLOCKED
     assert result.attempts == 1
     assert prepare_request.await_count == 2
-    fetcher.assert_awaited_once_with(URL)
+    fetcher.assert_awaited_once_with(URL, attempt=1)
     assert strategy.get_stats()["scheduled_retries"] == 1
 
 
