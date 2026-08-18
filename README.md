@@ -67,6 +67,7 @@ python -m pip install -r requirements.txt
 - retry для timeout, HTTP 429 и HTTP 5xx без retry для 403/404;
 - учёт типов ошибок, успешных retry и среднего времени ожидания;
 - список URL с постоянными ошибками и структурированные `final_errors`;
+- отдельный `ErrorTracker`, владеющий error records и их агрегацией;
 - асинхронное сохранение отдельного error report через `aiofiles`;
 - расширенный `CrawlReporter` со статистикой ошибок и retry.
 

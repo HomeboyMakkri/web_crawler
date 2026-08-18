@@ -8,6 +8,7 @@ def test_crawler_and_executor_share_one_retry_strategy() -> None:
 
     assert crawler.request_executor.retry_strategy is crawler.retry_strategy
     assert crawler.retry_strategy.max_retries == 2
+    assert crawler.final_errors is crawler.error_tracker.final_errors
 
 
 def test_crawler_aggregates_request_statistics_from_components() -> None:
