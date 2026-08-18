@@ -52,8 +52,8 @@ python -m pip install -r requirements.txt
 - отдельный `HttpTransport`, владеющий сессией, пулом и семафорами.
 - единый `PolitenessManager` для rate limiting и соблюдения `robots.txt`.
 - настраиваемый случайный `jitter` для интервалов между запросами;
-- отдельный `RetryPolicy` с ограниченным exponential backoff;
-- `RequestExecutor`, повторно применяющий правила вежливости перед retry.
+- единый `RetryStrategy` с классификацией ошибок и exponential backoff;
+- `RequestExecutor`, повторно применяющий правила вежливости перед каждой попыткой.
 - статистика реальных HTTP-попыток, задержек, retry и robots.txt.
 - расширенный live-отчёт: страницы/с, запросы/с, задержки и блокировки.
 

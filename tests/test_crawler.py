@@ -126,7 +126,7 @@ async def test_fetch_result_uses_configured_retries() -> None:
         retry_max_delay=2.0,
     )
     sleep = AsyncMock()
-    crawler.retry_policy._sleep = sleep
+    crawler.retry_strategy._sleep = sleep
 
     async with crawler:
         assert crawler.session is not None

@@ -17,7 +17,7 @@ from .http_transport import HttpTransport
 from .politeness_manager import PolitenessManager
 from .rate_limiter import RateLimiter
 from .request_executor import RequestExecutor
-from .retry_policy import RetryPolicy
+from .retry_strategy import RetryStrategy
 from .robots_parser import RobotsParser
 from .semaphore_manager import SemaphoreManager
 from .url_filter import URLFilter
@@ -65,15 +65,19 @@ class AsyncCrawler:
             jitter=jitter,
             user_agent=user_agent,
         )
-        self._retry_policy = RetryPolicy(
-            max_attempts=max_attempts,
+        validated_max_attempts = self._validate_positive_int(
+            max_attempts,
+            "max_attempts",
+        )
+        self._retry_strategy = RetryStrategy(
+            max_retries=validated_max_attempts - 1,
             base_delay=retry_base_delay,
             max_delay=retry_max_delay,
         )
         self._request_executor = RequestExecutor(
             fetcher=self._transport.fetch,
             prepare_request=self._politeness.prepare_request,
-            retry_policy=self._retry_policy,
+            retry_strategy=self._retry_strategy,
         )
 
         self.visited_urls: set[str] = set()
@@ -112,9 +116,9 @@ class AsyncCrawler:
         return self._politeness
 
     @property
-    def retry_policy(self) -> RetryPolicy:
+    def retry_strategy(self) -> RetryStrategy:
         """Expose retry configuration and statistics."""
-        return self._retry_policy
+        return self._retry_strategy
 
     @property
     def request_executor(self) -> RequestExecutor:
@@ -146,7 +150,7 @@ class AsyncCrawler:
         """Aggregate HTTP, politeness and retry statistics."""
         transport = self._transport.get_stats()
         politeness = self._politeness.get_stats()
-        retries = self._retry_policy.get_stats()
+        retries = self._retry_strategy.get_stats()
         return {
             "total_requests": transport["total_requests"],
             "successful_requests": transport["successful_requests"],

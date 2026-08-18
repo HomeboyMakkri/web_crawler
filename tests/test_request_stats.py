@@ -3,6 +3,13 @@ from unittest.mock import patch
 from src.crawler import AsyncCrawler
 
 
+def test_crawler_and_executor_share_one_retry_strategy() -> None:
+    crawler = AsyncCrawler(max_attempts=3)
+
+    assert crawler.request_executor.retry_strategy is crawler.retry_strategy
+    assert crawler.retry_strategy.max_retries == 2
+
+
 def test_crawler_aggregates_request_statistics_from_components() -> None:
     crawler = AsyncCrawler()
     transport_stats = {
@@ -42,7 +49,7 @@ def test_crawler_aggregates_request_statistics_from_components() -> None:
             return_value=politeness_stats,
         ),
         patch.object(
-            crawler.retry_policy,
+            crawler.retry_strategy,
             "get_stats",
             return_value=retry_stats,
         ),
