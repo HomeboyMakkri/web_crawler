@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncCrawler:
-    """Load web pages concurrently using one reusable HTTP session."""
+    """Load web pages concurrently through one reusable HTTP session."""
 
     def __init__(
         self,
