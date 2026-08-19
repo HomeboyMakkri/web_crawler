@@ -19,6 +19,7 @@ class ResponseContext:
         *,
         body: str = "OK",
         status: int = 200,
+        content_type: str | None = None,
         enter_exception: BaseException | None = None,
         release: asyncio.Event | None = None,
     ) -> None:
@@ -26,6 +27,12 @@ class ResponseContext:
         self._release = release
         self._response = MagicMock(status=status)
         self._response.text = AsyncMock(return_value=body)
+        self._response.headers = (
+            {}
+            if content_type is None
+            else {"Content-Type": content_type}
+        )
+        self._response.content_type = None
 
     async def __aenter__(self) -> Any:
         if self._release is not None:
@@ -65,7 +72,10 @@ async def test_fetch_success_reuses_session_and_reports_elapsed_time() -> None:
         with patch.object(
             session,
             "get",
-            return_value=ResponseContext(body="<html>OK</html>"),
+            return_value=ResponseContext(
+                body="<html>OK</html>",
+                content_type="Text/HTML; charset=utf-8",
+            ),
         ):
             result = await transport.fetch("https://example.com/page")
         assert transport.get_session() is session
@@ -73,6 +83,7 @@ async def test_fetch_success_reuses_session_and_reports_elapsed_time() -> None:
     assert result.outcome is FetchOutcome.SUCCESS
     assert result.content == "<html>OK</html>"
     assert result.status_code == 200
+    assert result.content_type == "text/html"
     assert result.elapsed_seconds == pytest.approx(0.25)
     assert session.closed
     assert transport.session is None
@@ -87,13 +98,18 @@ async def test_http_error_retains_status_and_response_body() -> None:
         with patch.object(
             transport.session,
             "get",
-            return_value=ResponseContext(body="Unavailable", status=503),
+            return_value=ResponseContext(
+                body="Unavailable",
+                status=503,
+                content_type="text/plain; charset=utf-8",
+            ),
         ):
             result = await transport.fetch("https://example.com/unavailable")
 
     assert result.outcome is FetchOutcome.HTTP_ERROR
     assert result.status_code == 503
     assert result.content == "Unavailable"
+    assert result.content_type == "text/plain"
     assert result.error == "HTTP 503"
     assert result.is_retryable is True
 

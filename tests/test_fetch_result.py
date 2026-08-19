@@ -9,6 +9,7 @@ def test_success_result_has_typed_properties() -> None:
     result = FetchResult.success(
         "https://example.com",
         "<html>OK</html>",
+        content_type="text/html",
         elapsed_seconds=0.25,
     )
 
@@ -17,6 +18,7 @@ def test_success_result_has_typed_properties() -> None:
     assert result.is_retryable is False
     assert result.status_code == 200
     assert result.content == "<html>OK</html>"
+    assert result.content_type == "text/html"
     assert result.error is None
     assert result.attempts == 1
     assert result.elapsed_seconds == 0.25
@@ -110,6 +112,25 @@ def test_result_is_immutable() -> None:
                 "elapsed_seconds": float("nan"),
             },
             "elapsed_seconds",
+        ),
+        (
+            {
+                "url": "https://example.com",
+                "outcome": FetchOutcome.SUCCESS,
+                "content": "OK",
+                "status_code": 200,
+                "content_type": "",
+            },
+            "content_type",
+        ),
+        (
+            {
+                "url": "https://example.com",
+                "outcome": FetchOutcome.TIMEOUT,
+                "error": "timeout",
+                "content_type": "text/html",
+            },
+            "content_type",
         ),
     ],
 )

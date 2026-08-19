@@ -129,6 +129,7 @@ class HttpTransport:
                 async with session.get(url, timeout=request_timeout) as response:
                     content = await response.text()
                     status = response.status
+                    content_type = self._extract_content_type(response)
             except asyncio.TimeoutError:
                 logger.warning("Timeout while fetching URL: %s", url)
                 return self._record_result(
@@ -182,6 +183,7 @@ class HttpTransport:
                     url,
                     status,
                     content=content,
+                    content_type=content_type,
                     attempts=validated_attempt,
                     elapsed_seconds=elapsed,
                 )
@@ -198,6 +200,7 @@ class HttpTransport:
                 url,
                 content,
                 status_code=status,
+                content_type=content_type,
                 attempts=validated_attempt,
                 elapsed_seconds=elapsed,
             )
@@ -272,6 +275,20 @@ class HttpTransport:
 
     def _elapsed_since(self, started_at: float) -> float:
         return max(0.0, self._clock() - started_at)
+
+    @staticmethod
+    def _extract_content_type(response: aiohttp.ClientResponse) -> str | None:
+        headers = getattr(response, "headers", None)
+        raw_content_type = (
+            headers.get("Content-Type")
+            if headers is not None and callable(getattr(headers, "get", None))
+            else None
+        )
+        if not isinstance(raw_content_type, str):
+            raw_content_type = getattr(response, "content_type", None)
+        if not isinstance(raw_content_type, str) or not raw_content_type.strip():
+            return None
+        return raw_content_type.partition(";")[0].strip().lower()
 
     def _record_request_start(self, started_at: float) -> None:
         self._total_requests += 1

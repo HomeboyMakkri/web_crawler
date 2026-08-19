@@ -21,6 +21,7 @@ class FetchResult:
     outcome: FetchOutcome
     content: str | None = None
     status_code: int | None = None
+    content_type: str | None = None
     error: str | None = None
     attempts: int = 1
     elapsed_seconds: float = 0.0
@@ -32,6 +33,10 @@ class FetchResult:
             raise ValueError("outcome must be a FetchOutcome")
         if self.content is not None and not isinstance(self.content, str):
             raise ValueError("content must be a string or None")
+        if self.content_type is not None and (
+            not isinstance(self.content_type, str) or not self.content_type.strip()
+        ):
+            raise ValueError("content_type must be a non-empty string or None")
         if isinstance(self.attempts, bool) or not isinstance(self.attempts, int):
             raise ValueError("attempts must be a positive integer")
         if self.attempts <= 0:
@@ -71,6 +76,7 @@ class FetchResult:
         content: str,
         *,
         status_code: int = 200,
+        content_type: str | None = None,
         attempts: int = 1,
         elapsed_seconds: float = 0.0,
     ) -> "FetchResult":
@@ -79,6 +85,7 @@ class FetchResult:
             outcome=FetchOutcome.SUCCESS,
             content=content,
             status_code=status_code,
+            content_type=content_type,
             attempts=attempts,
             elapsed_seconds=elapsed_seconds,
         )
@@ -91,6 +98,7 @@ class FetchResult:
         *,
         error: str | None = None,
         content: str | None = None,
+        content_type: str | None = None,
         attempts: int = 1,
         elapsed_seconds: float = 0.0,
     ) -> "FetchResult":
@@ -99,6 +107,7 @@ class FetchResult:
             outcome=FetchOutcome.HTTP_ERROR,
             content=content,
             status_code=status_code,
+            content_type=content_type,
             error=error or f"HTTP {status_code}",
             attempts=attempts,
             elapsed_seconds=elapsed_seconds,
@@ -168,6 +177,11 @@ class FetchResult:
                 raise ValueError("HTTP error must have a 4xx or 5xx status code")
         elif self.status_code is not None:
             raise ValueError("non-HTTP failure cannot contain a status code")
+        if (
+            self.outcome is not FetchOutcome.HTTP_ERROR
+            and self.content_type is not None
+        ):
+            raise ValueError("non-HTTP failure cannot contain a content_type")
 
     @staticmethod
     def _is_status_in_range(
