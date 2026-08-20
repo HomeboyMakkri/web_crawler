@@ -99,6 +99,19 @@ class StorageManager:
             "retried_saves": self._retried_saves,
         }
 
+    async def close(self) -> bool:
+        """Flush and close the backend without leaking storage failures."""
+        try:
+            await self._storage.close()
+        except Exception as error:
+            logger.error(
+                "Storage close failed: type=%s error=%s",
+                type(error).__name__,
+                error,
+            )
+            return False
+        return True
+
     async def _sleep_before_retry(self, delay: float) -> None:
         self._retried_saves += 1
         await self._sleep(delay)

@@ -9,8 +9,10 @@ from typing import Any
 
 import aiohttp
 
+from .crawl_record import CrawlRecord
 from .crawl_reporter import CrawlReporter
 from .crawler_queue import CrawlerQueue
+from .data_storage import DataStorage
 from .error_tracker import ErrorTracker
 from .errors import ParseError
 from .fetch_result import FetchOutcome, FetchResult
@@ -22,6 +24,7 @@ from .request_executor import RequestExecutor
 from .retry_strategy import RetryStrategy
 from .robots_parser import RobotsParser
 from .semaphore_manager import SemaphoreManager
+from .storage_manager import StorageManager
 from .url_filter import URLFilter
 
 
@@ -51,6 +54,7 @@ class AsyncCrawler:
         max_attempts: int = 1,
         retry_base_delay: float = 0.5,
         retry_max_delay: float = 30.0,
+        storage: DataStorage | None = None,
     ) -> None:
         self._transport = HttpTransport(
             max_concurrent=max_concurrent,
@@ -88,6 +92,11 @@ class AsyncCrawler:
             retry_strategy=self._retry_strategy,
         )
         self._error_tracker = ErrorTracker()
+        self._storage_manager = (
+            StorageManager(storage)
+            if storage is not None
+            else None
+        )
 
         self.visited_urls: set[str] = set()
         self.processed_urls: dict[str, dict[str, Any]] = {}
@@ -143,6 +152,11 @@ class AsyncCrawler:
     def request_executor(self) -> RequestExecutor:
         """Expose the component coordinating policy, transport and retries."""
         return self._request_executor
+
+    @property
+    def storage_manager(self) -> StorageManager | None:
+        """Expose optional persistence orchestration and its statistics."""
+        return self._storage_manager
 
     def _get_session(self) -> aiohttp.ClientSession:
         """Compatibility adapter for tests and earlier project stages."""
@@ -229,6 +243,9 @@ class AsyncCrawler:
             len(result["links"]),
             len(result["text"]),
         )
+        if self._storage_manager is not None and result.get("error") is None:
+            record = CrawlRecord.from_fetch_and_parse(fetch_result, result)
+            await self._storage_manager.save(record)
         return result
 
     async def crawl(
@@ -445,9 +462,15 @@ class AsyncCrawler:
         self._crawl_finished_at = None
 
     async def close(self) -> None:
-        """Close the shared HTTP session; calling this twice is safe."""
-        await self._politeness.close()
-        await self._transport.close()
+        """Close HTTP and optional storage resources; repeat calls are safe."""
+        try:
+            await self._politeness.close()
+        finally:
+            try:
+                await self._transport.close()
+            finally:
+                if self._storage_manager is not None:
+                    await self._storage_manager.close()
 
     async def __aenter__(self) -> "AsyncCrawler":
         await self._transport.__aenter__()

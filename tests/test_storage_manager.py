@@ -18,6 +18,7 @@ class FailingStorage(DataStorage):
         self._outcomes = list(outcomes)
         self.attempts = 0
         self.records: list[CrawlRecord] = []
+        self.events: list[str] = []
 
     async def _save(self, data: CrawlRecord) -> None:
         self.attempts += 1
@@ -25,6 +26,12 @@ class FailingStorage(DataStorage):
         if outcome is not None:
             raise outcome
         self.records.append(data)
+
+    async def _flush(self) -> None:
+        self.events.append("flush")
+
+    async def _close(self) -> None:
+        self.events.append("close")
 
 
 def make_record(url: str = "https://example.com") -> CrawlRecord:
@@ -191,3 +198,29 @@ async def test_cancellation_is_not_converted_into_failed_save() -> None:
 def test_storage_must_implement_data_storage() -> None:
     with pytest.raises(ValueError, match="DataStorage"):
         StorageManager(object())  # type: ignore[arg-type]
+
+
+async def test_close_flushes_and_closes_underlying_storage() -> None:
+    storage = FailingStorage([])
+    manager = StorageManager(storage, sleep=AsyncMock())
+
+    result = await manager.close()
+
+    assert result is True
+    assert storage.closed is True
+    assert storage.events == ["flush", "close"]
+
+
+async def test_close_error_is_reported_without_escaping() -> None:
+    class FailingCloseStorage(FailingStorage):
+        async def _flush(self) -> None:
+            raise OSError("flush failed")
+
+    storage = FailingCloseStorage([])
+    manager = StorageManager(storage, sleep=AsyncMock())
+
+    result = await manager.close()
+
+    assert result is False
+    assert storage.closed is False
+    assert manager.get_stats() == empty_stats()
