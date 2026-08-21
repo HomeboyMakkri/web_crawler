@@ -5,6 +5,7 @@ import csv
 import io
 import json
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -65,6 +66,33 @@ class CSVStorage(DataStorage):
                 await self._file.close()
                 self._file = None
 
+    async def read_records(self) -> list[CrawlRecord]:
+        """Read this CSV back into records for verification and demos.
+
+        CSV fields may contain embedded newlines, so the standard CSV parser
+        must see the complete character stream rather than physical lines.
+        """
+        if not self.closed:
+            await self.flush()
+
+        file = await aiofiles.open(
+            self.path,
+            "r",
+            encoding=self.encoding,
+            newline="",
+        )
+        try:
+            content = await file.read()
+        finally:
+            await file.close()
+
+        reader = csv.DictReader(io.StringIO(content, newline=""))
+        if reader.fieldnames is None:
+            return []
+        if tuple(reader.fieldnames) != self.FIELDNAMES:
+            raise ValueError("CSV header does not match CrawlRecord schema")
+        return [self._from_row(row) for row in reader]
+
     async def _write_rows(self, rows: str) -> None:
         file = await self._get_writer()
         payload = rows
@@ -120,3 +148,19 @@ class CSVStorage(DataStorage):
             "status_code": record.status_code,
             "content_type": record.content_type,
         }
+
+    @staticmethod
+    def _from_row(row: dict[str, str | None]) -> CrawlRecord:
+        try:
+            return CrawlRecord(
+                url=row["url"] or "",
+                title=row["title"] or "",
+                text=row["text"] or "",
+                links=json.loads(row["links"] or "null"),
+                metadata=json.loads(row["metadata"] or "null"),
+                crawled_at=datetime.fromisoformat(row["crawled_at"] or ""),
+                status_code=int(row["status_code"] or ""),
+                content_type=row["content_type"] or "",
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("invalid CrawlRecord CSV row") from error

@@ -12,14 +12,16 @@ from src.csv_storage import CSVStorage
 
 
 class FakeAsyncCSVFile:
-    def __init__(self, filesystem: "FakeCSVAiofiles") -> None:
+    def __init__(self, filesystem: "FakeCSVAiofiles", mode: str) -> None:
         self.filesystem = filesystem
+        self.mode = mode
         self.closed = False
 
     async def tell(self) -> int:
         return len(self.filesystem.content)
 
     async def write(self, value: str) -> int:
+        assert self.mode == "a+"
         self.filesystem.active_writes += 1
         self.filesystem.max_active_writes = max(
             self.filesystem.max_active_writes,
@@ -35,6 +37,10 @@ class FakeAsyncCSVFile:
 
     async def flush(self) -> None:
         self.filesystem.flush_calls += 1
+
+    async def read(self) -> str:
+        assert self.mode == "r"
+        return self.filesystem.content
 
     async def close(self) -> None:
         self.closed = True
@@ -58,7 +64,7 @@ class FakeCSVAiofiles:
         newline: str,
     ) -> FakeAsyncCSVFile:
         self.open_calls.append((Path(path), mode, encoding, newline))
-        return FakeAsyncCSVFile(self)
+        return FakeAsyncCSVFile(self, mode)
 
 
 @pytest.fixture
@@ -207,3 +213,24 @@ async def test_concurrent_saves_are_serialized_by_lock(
     assert fake_aiofiles.max_active_writes == 1
     assert len(fake_aiofiles.open_calls) == 1
     assert fake_aiofiles.content.count(",".join(CSVStorage.FIELDNAMES)) == 1
+
+
+async def test_read_records_restores_complex_crawl_record(
+    fake_aiofiles: FakeCSVAiofiles,
+) -> None:
+    storage = CSVStorage("records.csv")
+    record = make_record(
+        title='Title, with "quotes"',
+        text="First line\nSecond line",
+    )
+    await storage.save(record)
+
+    restored = await storage.read_records()
+
+    assert restored == [record]
+    assert fake_aiofiles.open_calls[-1] == (
+        Path("records.csv"),
+        "r",
+        "utf-8",
+        "",
+    )

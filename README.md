@@ -71,6 +71,31 @@ python -m pip install -r requirements.txt
 - асинхронное сохранение отдельного error report через `aiofiles`;
 - расширенный `CrawlReporter` со статистикой ошибок и retry.
 
+## Возможности Day 6
+
+- стандартная модель сохраняемой страницы `CrawlRecord`;
+- минимальный асинхронный контракт `DataStorage`;
+- JSON Lines через `aiofiles` с безопасной конкурентной записью;
+- CSV с фиксированной схемой и JSON-полями `links`/`metadata`;
+- буферизированные batch-вставки и индексы через `aiosqlite`;
+- повтор временных ошибок записи и отдельная storage-статистика;
+- необязательное автоматическое сохранение после `fetch_and_parse()`;
+- `CompositeStorage` для одновременной записи в несколько backends;
+- ошибки сохранения не останавливают workers и не попадают в `failed_urls`.
+
+Один обход можно одновременно сохранить в три формата:
+
+```python
+storage = CompositeStorage([
+    JSONStorage("pages.jsonl"),
+    CSVStorage("pages.csv"),
+    SQLiteStorage("pages.db"),
+])
+
+async with AsyncCrawler(storage=storage) as crawler:
+    await crawler.crawl(["https://example.com"])
+```
+
 Ограничения Day 4 включаются явно, чтобы сохранить поведение предыдущих дней:
 
 ```python
@@ -130,6 +155,19 @@ python -m src.day5_demo
 
 Результат будет записан в `day5_error_report.json`. Доступ к интернету не
 требуется, но WSL должен разрешать соединения с `127.0.0.1`.
+
+Day 6 — один обход локального сайта с одновременным сохранением в JSON Lines,
+CSV и SQLite и последующим чтением всех трёх форматов:
+
+```bash
+python -m src.day6_demo
+```
+
+Файлы сохраняются в `day6_results/pages.jsonl`, `pages.csv` и `pages.db`.
+Демонстрация не обращается в интернет, но запускает локальный сайт на
+`127.0.0.1`. JSON Lines и CSV работают в режиме добавления, а SQLite обновляет
+повторно встреченный URL, поэтому для чистого повторного запуска используйте
+пустой каталог результатов.
 
 ## Тесты
 
