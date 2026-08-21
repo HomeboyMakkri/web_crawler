@@ -3,6 +3,7 @@ import pytest
 from src.day4_demo import create_demo_app, run_demo
 
 
+@pytest.mark.socket
 @pytest.mark.asyncio
 async def test_demo_exercises_complete_day4_pipeline() -> None:
     messages: list[str] = []
