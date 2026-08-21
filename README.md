@@ -75,17 +75,80 @@ python -m pip install -r requirements.txt
 
 - стандартная модель сохраняемой страницы `CrawlRecord`;
 - минимальный асинхронный контракт `DataStorage`;
-- JSON Lines через `aiofiles` с безопасной конкурентной записью;
-- CSV с фиксированной схемой и JSON-полями `links`/`metadata`;
-- буферизированные batch-вставки и индексы через `aiosqlite`;
+- масштабируемый JSON Lines через `aiofiles` с безопасной конкурентной записью;
+- потоковое чтение JSON Lines и экспорт читаемого pretty JSON snapshot;
+- CSV в настраиваемой кодировке с корректным экранированием специальных символов;
+- буферизированные batch-вставки, транзакции и индексы через `aiosqlite`;
 - повтор временных ошибок записи и отдельная storage-статистика;
 - необязательное автоматическое сохранение после `fetch_and_parse()`;
 - `CompositeStorage` для одновременной записи в несколько backends;
 - ошибки сохранения не останавливают workers и не попадают в `failed_urls`.
 
-Один обход можно одновременно сохранить в три формата:
+### JSON Lines и pretty JSON
+
+`JSONStorage` использует JSON Lines (`.jsonl`) как основной формат хранения:
+каждая запись занимает одну строку, новые записи добавляются в конец файла, а
+чтение выполняется последовательно без загрузки всего набора в память. Такой
+формат подходит для долгого обхода и большого количества страниц.
+
+Pretty JSON (`.json`) — отдельный читаемый snapshot в виде одного JSON-массива.
+Он создаётся явно методом `export_pretty()` и не меняет исходный JSONL-файл:
 
 ```python
+from src.json_storage import JSONStorage
+
+json_storage = JSONStorage("pages.jsonl")
+# ... await json_storage.save(record)
+await json_storage.export_pretty("pages.json", indent=2)
+await json_storage.close()
+```
+
+Перед экспортом сбрасывается буфер открытого writer. Экспорт читает JSONL и
+пишет snapshot асинхронно и последовательно, сохраняет Unicode и создаёт `[]`
+для пустого storage.
+
+### CSV и SQLite
+
+`CSVStorage` записывает стабильную схему `CrawlRecord`, поддерживает выбранную
+кодировку, а стандартный CSV writer корректно обрабатывает Unicode, запятые,
+кавычки и переносы строк. Поля `links` и `metadata` сохраняются как JSON:
+
+```python
+from src.csv_storage import CSVStorage
+
+csv_storage = CSVStorage("pages.csv", encoding="utf-8")
+# ... await csv_storage.save(record)
+await csv_storage.close()
+```
+
+`SQLiteStorage` создаёт таблицу и индексы через `init_db()` при явном вызове
+или лениво при первой операции. Записи буферизуются до `batch_size`, затем
+сохраняются одной транзакцией через `executemany()`; `flush()` фиксирует остаток
+буфера. Повторный URL обновляет существующую строку:
+
+```python
+from src.sqlite_storage import SQLiteStorage
+
+sqlite_storage = SQLiteStorage("pages.db", batch_size=100)
+await sqlite_storage.init_db()
+# ... await sqlite_storage.save(record)
+await sqlite_storage.flush()
+await sqlite_storage.close()
+```
+
+### Одновременное сохранение
+
+`CompositeStorage` отправляет каждую запись во все настроенные backends. У
+каждого дочернего storage собственные retry и статистика, поэтому повтор одной
+ошибочной записи в одном backend не дублирует её в остальных:
+
+```python
+from src.composite_storage import CompositeStorage
+from src.crawler import AsyncCrawler
+from src.csv_storage import CSVStorage
+from src.json_storage import JSONStorage
+from src.sqlite_storage import SQLiteStorage
+
 storage = CompositeStorage([
     JSONStorage("pages.jsonl"),
     CSVStorage("pages.csv"),
@@ -157,26 +220,48 @@ python -m src.day5_demo
 требуется, но WSL должен разрешать соединения с `127.0.0.1`.
 
 Day 6 — один обход локального сайта с одновременным сохранением в JSON Lines,
-CSV и SQLite и последующим чтением всех трёх форматов:
+CSV и SQLite, созданием pretty JSON и сравнением прочитанных данных:
 
 ```bash
-python -m src.day6_demo
+./venv/bin/python -m src.day6_demo
 ```
 
-Файлы сохраняются в `day6_results/pages.jsonl`, `pages.csv` и `pages.db`.
-Демонстрация не обращается в интернет, но запускает локальный сайт на
-`127.0.0.1`. JSON Lines и CSV работают в режиме добавления, а SQLite обновляет
-повторно встреченный URL, поэтому для чистого повторного запуска используйте
-пустой каталог результатов.
+Демонстрация использует только временный локальный сайт на `127.0.0.1` и не
+обращается во внешний интернет. По умолчанию `run_demo(reset_output=True)` перед
+обходом удаляет только известные файлы Day 6, поэтому последовательные запуски
+дают одинаковые три записи. При `reset_output=False` сохраняется обычное
+append/upsert-поведение backends.
+
+Результаты находятся в каталоге `day6_results`:
+
+- `pages.jsonl` — основной JSON Lines storage;
+- `pages.json` — форматированный JSON snapshot;
+- `pages.csv` — CSV-представление;
+- `pages.db` — база SQLite.
+
+После записи demo читает все четыре представления обратно, сравнивает полную
+схему и значения `CrawlRecord` и завершает работу с ошибкой при нарушении
+целостности.
 
 ## Тесты
 
 ```bash
-python -m pytest -q
+./venv/bin/python -m pytest -q
 ```
 
-Полный локальный socket-сценарий Day 5 можно запустить отдельно:
+Обычные тесты без socket-сценариев можно запустить отдельно:
 
 ```bash
-python -m pytest -q tests/test_day5_demo_socket.py
+./venv/bin/python -m pytest -q -m "not socket"
 ```
+
+Полные локальные socket-сценарии Day 5 и Day 6:
+
+```bash
+./venv/bin/python -m pytest -q tests/test_day5_demo_socket.py
+./venv/bin/python -m pytest -q tests/test_day6_demo_socket.py
+```
+
+Socket-тест Day 6 запускает настоящий pipeline `aiohttp` → `AsyncCrawler` →
+parser → `CrawlRecord` → три storage backend-а → чтение и сравнение, но всё
+равно использует только `127.0.0.1`.
