@@ -184,10 +184,10 @@ architectural decomposition.
 | 1. `sitemap.xml` support | SPEC 4 | D7-01, D7-08 | D7-01 parser completed and offline-verified; crawler integration pending D7-08. |
 | 2. `CrawlerStats` and extended statistics | SPEC 5 | D7-02, D7-03, D7-08 | D7-02 outcome source and D7-03 derived snapshot-builder completed and offline-verified; facade exposure remains pending D7-08. |
 | 3. JSON and HTML export with visualizations | SPEC 7-8 | D7-09 | Pending. Export API is deliberately async and must be awaited. |
-| 4. YAML or JSON configuration | SPEC 6 | D7-04 | Pending. v1.0 deliberately selects strict JSON, which satisfies the assignment choice. |
+| 4. YAML or JSON configuration | SPEC 6 | D7-04, D7-05 | D7-04 strict JSON configuration and D7-05 configured storage construction completed and offline-verified; v1.0 deliberately selects JSON, which satisfies the assignment choice. |
 | 5. `argparse` CLI and required flags | SPEC 11 | D7-10 | Pending. Includes canonical module entry point and root `crawler.py` compatibility wrapper. |
-| 6. Console/file logging and rotation | SPEC 10 | D7-06 | Pending. |
-| 7. Real-time progress, speed, ETA, active work | SPEC 9 | D7-07 | Pending. |
+| 6. Console/file logging and rotation | SPEC 10 | D7-06 | D7-06 console/file logging, UTF-8 output, rotation, and idempotent handler ownership completed and offline-verified. |
+| 7. Real-time progress, speed, ETA, active work | SPEC 9 | D7-07 | D7-07 dynamic percentage, throughput, ETA, and active page/request reporting completed and offline-verified. |
 | 8. `AdvancedCrawler` final integration | SPEC 7 | D7-08 | Pending; facade must compose the existing crawler rather than replace it. |
 | 9. Complete usage demonstration | SPEC 7, 11, 13 | D7-11 | Pending; exact assignment flow is retained with documented JSON and awaited-export corrections. |
 | 10. Performance testing and optimization | SPEC 12 | D7-12 | Pending; baseline and analysis are mandatory, optimization is conditional on evidence. |
@@ -349,7 +349,24 @@ green.
 
 ### D7-04 — Implement strict typed JSON configuration
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `src/crawler_config.py` now provides frozen typed settings for
+crawl behavior, storage backends, reporting, and logging plus
+`CrawlerConfig.from_json()`/`from_dict()`. The loader accepts strict UTF-8 JSON,
+rejects unknown keys at every level with field paths, applies the complete
+defaults including four total request attempts, validates constructor-aligned
+numeric/string/boolean/regex and cross-field boundaries, rejects non-finite JSON
+numbers, normalizes logging levels, and resolves every configured file path
+relative to the config file. Empty source lists remain valid during parsing;
+`validate_effective_sources()` performs the final merged-source check.
+Configuration objects use frozen dataclasses and tuples, while `to_dict()`
+returns a detached JSON-friendly snapshot. Loading creates no output directory,
+storage backend, HTTP session, or network activity. Current verification: the
+focused suite passed with `162 passed`; `compileall` and `git diff --check`
+passed; the full non-socket suite passed outside the sandbox with
+`895 passed, 4 deselected`. No socket, localhost, or public-network checks were
+run.
 
 **Dependencies:** D7-00
 
@@ -381,7 +398,22 @@ and every invalid field produces an actionable configuration error.
 
 ### D7-05 — Build configured storage from existing backends
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `src/storage_factory.py` builds existing `JSONStorage`,
+`CSVStorage`, and `SQLiteStorage` instances from validated `StorageSettings`.
+An empty declaration returns no storage, one backend is returned directly, and
+multiple declarations preserve order inside `CompositeStorage`. The factory
+creates parent directories but opens no JSONL/CSV handle or SQLite connection;
+all writing, buffering, retry, statistics, flush, and close behavior remains in
+the existing storage components. Offline tests cover every backend option,
+empty/single/composite shapes, duplicate backend types with distinct paths,
+resolved paths, parent creation, invalid config, exact instances, and lazy
+resources. Current focused D7-04/D7-05 verification passed with `171 passed`;
+the combined D7-04 through D7-07 suite passed with `214 passed`; `compileall`
+and `git diff --check` passed; the full non-socket suite passed outside the
+sandbox with `932 passed, 4 deselected`. No socket, localhost, public-network,
+or real SQLite I/O checks were run.
 
 **Dependencies:** D7-04
 
@@ -411,7 +443,24 @@ tests remain unchanged.
 
 ### D7-06 — Add application logging configuration
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `src/logging_config.py` configures the root logger only when the
+application explicitly calls `configure_logging()`. It always installs one
+formatted console handler and optionally one UTF-8 `RotatingFileHandler` with
+validated level/rotation settings and parent creation. Reconfiguration replaces
+and closes only application-owned handlers, preserves unrelated handlers, and
+does not duplicate output. New handlers are constructed before the active set
+is changed, so setup failure propagates as `ConfigurationError` without
+destroying the previous configuration. Offline tests cover every supported
+case-insensitive level, invalid settings, console-only output, formatting,
+UTF-8 file output, configured and actual rotation, parent creation, repeated
+setup, unrelated handlers, failure preservation, and import side effects.
+Current focused verification passed with `22 passed`; the combined D7-04
+through D7-07 suite passed with `214 passed`; `compileall` and
+`git diff --check` passed; the full non-socket suite passed outside the sandbox
+with `932 passed, 4 deselected`. No socket, localhost, or public-network checks
+were run.
 
 **Dependencies:** D7-04
 
@@ -440,7 +489,23 @@ and module imports have no logging side effects.
 
 ### D7-07 — Extend CrawlReporter with percentage and ETA
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** The existing `CrawlReporter` remains the only human-readable live
+progress formatter and now adds dynamic completed/scheduled percentage, active
+page tasks, active HTTP requests, current page throughput, and ETA calculated as
+`(queued + active) / pages_per_second`. Zero scheduled work reports `0.0%`;
+final output reports `100.0%`; zero throughput, completed work, and final output
+use `ETA --`. Discovery-driven growth of scheduled work may lower the displayed
+percentage and change ETA without affecting the crawl. Existing request/retry/
+politeness details and output-error isolation remain intact. Offline tests cover
+zero, normal, stalled, growing, and final snapshots, safe missing request and
+active-request fields, active work, output failure, repeated reporting, and
+cancellation. Current focused reporter/crawl integration passed with
+`21 passed`; the combined D7-04 through D7-07 suite passed with `214 passed`;
+`compileall` and `git diff --check` passed; the full non-socket suite passed
+outside the sandbox with `932 passed, 4 deselected`. No socket, localhost, or
+public-network checks were run.
 
 **Dependencies:** D7-03
 

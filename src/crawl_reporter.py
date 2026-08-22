@@ -72,15 +72,18 @@ class CrawlReporter:
     ) -> str:
         """Convert a statistics snapshot to one compact console line."""
         prefix = "Итог" if final else "Прогресс"
+        percentage = CrawlReporter._percentage(stats, final=final)
+        eta = CrawlReporter._format_eta(stats, final=final)
         crawl_message = (
             f"{prefix}: обработано {stats['pages_completed']}/"
-            f"{stats['pages_scheduled']} | "
+            f"{stats['pages_scheduled']} | прогресс {percentage:.1f}% | "
             f"успешно {stats['pages_successful']} | "
             f"в очереди {stats['pages_queued']} | "
-            f"активно {stats['pages_active']} | "
+            f"активно страниц {stats['pages_active']} | "
+            f"активно запросов {stats.get('active_requests', 0)} | "
             f"ошибок {stats['pages_failed']} | "
             f"заблокировано {stats.get('pages_blocked', 0)} | "
-            f"скорость {stats['pages_per_second']:.2f} стр/с"
+            f"скорость {stats['pages_per_second']:.2f} стр/с | ETA {eta}"
         )
         if request_stats is None:
             return crawl_message
@@ -118,3 +121,22 @@ class CrawlReporter:
             f"{name}={count}"
             for name, count in sorted(value.items(), key=lambda item: str(item[0]))
         )
+
+    @staticmethod
+    def _percentage(stats: CrawlStats, *, final: bool) -> float:
+        if final:
+            return 100.0
+        scheduled = stats["pages_scheduled"]
+        if scheduled <= 0:
+            return 0.0
+        return stats["pages_completed"] / scheduled * 100.0
+
+    @staticmethod
+    def _format_eta(stats: CrawlStats, *, final: bool) -> str:
+        if final:
+            return "--"
+        remaining = stats["pages_queued"] + stats["pages_active"]
+        throughput = stats["pages_per_second"]
+        if remaining <= 0 or throughput <= 0:
+            return "--"
+        return f"{remaining / throughput:.1f} с"
