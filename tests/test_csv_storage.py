@@ -115,6 +115,20 @@ async def test_save_writes_fixed_header_and_utf8_row(
     ]
 
 
+async def test_save_accepts_standard_dictionary(
+    fake_aiofiles: FakeCSVAiofiles,
+) -> None:
+    storage = CSVStorage("records.csv")
+    record = make_record()
+
+    await storage.save(record.to_dict())
+
+    row = read_rows(fake_aiofiles.content)[0]
+    assert row["url"] == record.url
+    assert json.loads(row["links"]) == record.links
+    assert json.loads(row["metadata"]) == record.metadata
+
+
 async def test_links_and_metadata_are_json_encoded(
     fake_aiofiles: FakeCSVAiofiles,
 ) -> None:

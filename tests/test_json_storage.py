@@ -151,6 +151,20 @@ async def test_save_appends_one_utf8_json_line(
     ]
 
 
+async def test_save_accepts_standard_dictionary(
+    fake_aiofiles: FakeAiofiles,
+) -> None:
+    storage = JSONStorage("records.jsonl")
+    record = make_record()
+
+    await storage.save(record.to_dict())
+
+    saved = json.loads(fake_aiofiles.content)
+    assert saved["url"] == record.url
+    assert saved["links"] == record.links
+    assert saved["metadata"] == record.metadata
+
+
 async def test_save_many_uses_one_batch_write(
     fake_aiofiles: FakeAiofiles,
 ) -> None:

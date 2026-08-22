@@ -21,6 +21,19 @@ class CrawlRecord:
     status_code: int
     content_type: str
 
+    _FIELD_NAMES = frozenset(
+        {
+            "url",
+            "title",
+            "text",
+            "links",
+            "metadata",
+            "crawled_at",
+            "status_code",
+            "content_type",
+        }
+    )
+
     def __post_init__(self) -> None:
         self._validate_non_empty_string(self.url, "url")
         self._validate_string(self.title, "title")
@@ -113,6 +126,38 @@ class CrawlRecord:
             content_type=(
                 fetch_result.content_type or "application/octet-stream"
             ),
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "CrawlRecord":
+        """Validate and normalize the standard eight-field dictionary."""
+        if not isinstance(data, dict):
+            raise ValueError("data must be a dictionary")
+
+        keys = set(data)
+        if keys != cls._FIELD_NAMES:
+            details: list[str] = []
+            missing = sorted(cls._FIELD_NAMES - keys)
+            unknown = sorted(keys - cls._FIELD_NAMES)
+            if missing:
+                details.append(f"missing keys: {', '.join(missing)}")
+            if unknown:
+                details.append(f"unknown keys: {', '.join(unknown)}")
+            raise ValueError(
+                "CrawlRecord dictionary has an invalid key set ("
+                + "; ".join(details)
+                + ")"
+            )
+
+        return cls(
+            url=cast(str, data["url"]),
+            title=cast(str, data["title"]),
+            text=cast(str, data["text"]),
+            links=cast(list[str], data["links"]),
+            metadata=cast(dict[str, str], data["metadata"]),
+            crawled_at=cast(datetime, data["crawled_at"]),
+            status_code=cast(int, data["status_code"]),
+            content_type=cast(str, data["content_type"]),
         )
 
     def to_dict(self) -> dict[str, object]:

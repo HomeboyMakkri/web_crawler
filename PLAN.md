@@ -58,7 +58,16 @@ preserved, and focused regression tests pass.
 
 ### D6-R2 — Accept standard dictionaries at the DataStorage boundary
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `CrawlRecord.from_dict()` validates the exact eight-field schema,
+and `DataStorage` now normalizes dictionary inputs once before passing only
+`CrawlRecord` instances to concrete backends. Coverage verifies detached nested
+containers, the existing-record fast path, complete batch validation, direct
+JSON/CSV/SQLite input, lifecycle ordering, and CompositeStorage retry-isolated
+fan-out. Current verification: `100 passed` in the focused storage suite and
+`672 passed, 4 deselected` in the complete non-socket suite; `compileall` and
+`git diff --check` also pass.
 
 **Dependencies:** none
 
@@ -96,7 +105,17 @@ storage behavior stays green.
 
 ### D6-R3 — Re-establish and document the Days 1-6 baseline
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** D6-R1 and D6-R2 were audited against SPEC 3.3 without finding a
+production or test defect. `README.md` now documents the four-attempt default,
+the `max_attempts=1` opt-out, dictionary input at the `DataStorage` boundary,
+base-class-only normalization, and complete batch validation. `AGENTS.md`,
+`SPEC.md`, and `PLAN.md` match the implemented contracts. Current verification:
+`compileall` passed; the focused retry suite passed with `13 passed`; the
+focused storage suite passed with `100 passed`; the complete non-socket suite
+passed with `672 passed, 4 deselected`; and `git diff --check` passed. No socket,
+localhost, or public-network checks were run.
 
 **Dependencies:** D6-R1, D6-R2
 

@@ -2,8 +2,12 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from typing import TypeAlias
 
 from .crawl_record import CrawlRecord
+
+
+RecordInput: TypeAlias = CrawlRecord | dict[str, object]
 
 
 class DataStorage(ABC):
@@ -26,12 +30,13 @@ class DataStorage(ABC):
         """Whether the storage completed its close lifecycle."""
         return self._closed
 
-    async def save(self, data: CrawlRecord) -> None:
+    async def save(self, data: RecordInput) -> None:
         """Save one record."""
         self._ensure_open()
-        await self._save(data)
+        record = self._normalize(data)
+        await self._save(record)
 
-    async def save_many(self, data: Iterable[CrawlRecord]) -> None:
+    async def save_many(self, data: Iterable[RecordInput]) -> None:
         """Save records in iteration order.
 
         The default implementation uses ``_save()`` repeatedly. A storage with
@@ -39,7 +44,8 @@ class DataStorage(ABC):
         public lifecycle contract.
         """
         self._ensure_open()
-        await self._save_many(data)
+        records = [self._normalize(item) for item in data]
+        await self._save_many(records)
 
     async def flush(self) -> None:
         """Make all previously accepted records durable."""
@@ -73,3 +79,11 @@ class DataStorage(ABC):
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("storage is closed")
+
+    @staticmethod
+    def _normalize(data: RecordInput) -> CrawlRecord:
+        if isinstance(data, CrawlRecord):
+            return data
+        if isinstance(data, dict):
+            return CrawlRecord.from_dict(data)
+        raise ValueError("data must be a CrawlRecord or dictionary")

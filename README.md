@@ -65,6 +65,8 @@ python -m pip install -r requirements.txt
 - единый `RetryStrategy` с ограничениями по типам ошибок;
 - exponential backoff и увеличиваемые таймауты отдельных попыток;
 - retry для timeout, HTTP 429 и HTTP 5xx без retry для 403/404;
+- четыре HTTP-попытки по умолчанию: одна начальная и до трёх повторов;
+- явный `max_attempts=1` для полного отключения request retry;
 - учёт типов ошибок, успешных retry и среднего времени ожидания;
 - список URL с постоянными ошибками и структурированные `final_errors`;
 - отдельный `ErrorTracker`, владеющий error records и их агрегацией;
@@ -74,7 +76,8 @@ python -m pip install -r requirements.txt
 ## Возможности Day 6
 
 - стандартная модель сохраняемой страницы `CrawlRecord`;
-- минимальный асинхронный контракт `DataStorage`;
+- минимальный асинхронный контракт `DataStorage`, принимающий `CrawlRecord`
+  или его точное восьмиполевое словарное представление;
 - масштабируемый JSON Lines через `aiofiles` с безопасной конкурентной записью;
 - потоковое чтение JSON Lines и экспорт читаемого pretty JSON snapshot;
 - CSV в настраиваемой кодировке с корректным экранированием специальных символов;
@@ -83,6 +86,22 @@ python -m pip install -r requirements.txt
 - необязательное автоматическое сохранение после `fetch_and_parse()`;
 - `CompositeStorage` для одновременной записи в несколько backends;
 - ошибки сохранения не останавливают workers и не попадают в `failed_urls`.
+
+Нормализация входных данных выполняется один раз на публичной границе
+`DataStorage`: `save()` и `save_many()` принимают готовый `CrawlRecord` либо
+словарь с теми же восемью полями, которые возвращает `CrawlRecord.to_dict()`.
+Конкретные JSON, CSV и SQLite backends всегда получают только проверенные
+`CrawlRecord`:
+
+```python
+record_data = record.to_dict()
+await json_storage.save(record_data)
+await csv_storage.save(record_data)
+await sqlite_storage.save(record_data)
+```
+
+Перед передачей batch в backend `save_many()` сначала проверяет все элементы;
+невалидный элемент не приводит к частичной записи этого batch.
 
 ### JSON Lines и pretty JSON
 
@@ -159,7 +178,9 @@ async with AsyncCrawler(storage=storage) as crawler:
     await crawler.crawl(["https://example.com"])
 ```
 
-Ограничения Day 4 включаются явно, чтобы сохранить поведение предыдущих дней:
+Параметры вежливости Day 4 включаются явно. Request retry при этом уже включён
+по умолчанию: `AsyncCrawler()` выполняет не более четырёх попыток для временной
+ошибки, а `max_attempts=1` полностью отключает повторы:
 
 ```python
 crawler = AsyncCrawler(
@@ -171,7 +192,7 @@ crawler = AsyncCrawler(
     total_timeout=30.0,
     timeout_multiplier=2.0,
     max_timeout=120.0,
-    max_attempts=3,
+    max_attempts=4,
     retry_base_delay=0.5,
     retry_max_delay=10.0,
 )

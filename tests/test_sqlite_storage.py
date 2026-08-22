@@ -101,6 +101,15 @@ async def test_save_buffers_until_explicit_flush(tmp_path: Path) -> None:
         assert await fetch_value(path, "SELECT COUNT(*) FROM crawl_records") == 1
 
 
+async def test_save_accepts_standard_dictionary(tmp_path: Path) -> None:
+    path = tmp_path / "crawler.db"
+    record = make_record()
+    async with opened_storage(path) as storage:
+        await storage.save(record.to_dict())
+
+        assert await storage.read_records() == [record]
+
+
 async def test_reaching_batch_size_commits_automatically(tmp_path: Path) -> None:
     path = tmp_path / "crawler.db"
     async with opened_storage(path, batch_size=2) as storage:

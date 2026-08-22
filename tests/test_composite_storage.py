@@ -93,6 +93,38 @@ async def test_one_record_is_fanned_out_to_every_storage() -> None:
     }
 
 
+async def test_dictionary_is_normalized_once_before_fan_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = FakeStorage()
+    second = OtherFakeStorage()
+    composite = CompositeStorage([first, second])
+    record = make_record()
+    calls = 0
+    original_from_dict = CrawlRecord.from_dict
+
+    def tracked_from_dict(
+        cls: type[CrawlRecord],
+        data: dict[str, object],
+    ) -> CrawlRecord:
+        nonlocal calls
+        calls += 1
+        return original_from_dict(data)
+
+    monkeypatch.setattr(
+        CrawlRecord,
+        "from_dict",
+        classmethod(tracked_from_dict),
+    )
+
+    await composite.save(record.to_dict())
+
+    assert calls == 1
+    assert first.records == [record]
+    assert second.records == [record]
+    assert first.records[0] is second.records[0]
+
+
 async def test_child_retry_does_not_duplicate_other_storage() -> None:
     stable = FakeStorage()
     recovering = OtherFakeStorage([OSError("busy"), None])
@@ -110,6 +142,20 @@ async def test_child_retry_does_not_duplicate_other_storage() -> None:
         "failed_saves": 0,
         "retried_saves": 1,
     }
+
+
+async def test_dictionary_fan_out_preserves_child_retry_isolation() -> None:
+    stable = FakeStorage()
+    recovering = OtherFakeStorage([OSError("busy"), None])
+    composite = CompositeStorage([stable, recovering])
+    record = make_record()
+
+    await composite.save(record.to_dict())
+
+    assert stable.records == [record]
+    assert stable.attempts == 1
+    assert recovering.records == [record]
+    assert recovering.attempts == 2
 
 
 async def test_permanent_child_failure_is_reported_after_other_saves() -> None:
