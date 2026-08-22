@@ -19,7 +19,14 @@ task. In particular, no task authorizes socket or real-network execution.
 
 ### D6-R1 — Enable automatic request retries by default
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `AsyncCrawler()` now configures the shared `RetryStrategy` with
+`max_retries=3`; offline integration coverage verifies default timeout,
+network, HTTP 429/500/503, recovery, permanent-error, explicit opt-out, and
+statistics behavior. Current verification: `13 passed` in the focused retry
+suite, `42 passed` across crawler/retry tests, and `641 passed, 4 deselected`
+in the complete non-socket suite.
 
 **Dependencies:** none
 

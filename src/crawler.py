@@ -51,7 +51,7 @@ class AsyncCrawler:
         min_delay: float = 0.0,
         jitter: float = 0.0,
         user_agent: str = "AsyncCrawler/1.0",
-        max_attempts: int = 1,
+        max_attempts: int = 4,
         retry_base_delay: float = 0.5,
         retry_max_delay: float = 30.0,
         storage: DataStorage | None = None,
