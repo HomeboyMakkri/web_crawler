@@ -13,6 +13,11 @@ This specification defines observable v1.0 behavior. Existing Days 1-6 tests
 remain part of the acceptance contract, together with the retry and storage
 boundary corrections in section 3.3.
 
+The separate traceability table in `PLAN.md` maps the original Day 7 assignment
+to this specification, implementation tasks, deliberate v1.0 decisions, and
+final verification evidence. It complements this normative specification; it
+does not override it.
+
 ## 2. Terminology
 
 - **HTTP attempt**: one call that reaches `HttpTransport.fetch()`. Retries and
@@ -75,6 +80,7 @@ independently incremented statistics state.
 The intended modules are:
 
 - `src/sitemap_parser.py`: injected-request sitemap traversal;
+- `src/crawler_stats.py`: derived run-statistics snapshot builder;
 - `src/crawler_config.py`: typed strict JSON configuration;
 - `src/storage_factory.py`: construction of existing storage backends;
 - `src/logging_config.py`: application logging setup;
@@ -83,10 +89,13 @@ The intended modules are:
 - `src/cli.py`: argparse entry point;
 - `src/day7_demo.py`: deterministic demonstration, with socket behavior marked
   and never included in default tests;
-- `src/benchmark.py`: opt-in simulated-I/O benchmark.
+- `src/benchmark.py`: opt-in simulated-I/O benchmark;
+- root `crawler.py`: assignment-compatible import and CLI wrapper around
+  `src.advanced_crawler` and `src.cli`.
 
-Module boundaries can be adjusted if tests show a smaller design, but their
-responsibilities and the no-duplication rules are mandatory.
+Internal module boundaries can be adjusted if tests show a smaller design, but
+the public `CrawlerStats` class, root compatibility wrapper, listed
+responsibilities, and no-duplication rules are mandatory.
 
 ### 3.3 Days 1-6 remediation contracts
 
@@ -240,14 +249,19 @@ v1.0.
 
 ### 5.1 Ownership
 
-There is no separate counter-owning `CrawlerStats` engine. `AsyncCrawler` and
-its existing components remain the sources of truth. Day 7 may retain terminal
-`FetchResult` data needed to derive status/domain summaries, but must not count
-the same event independently in two owners.
+`CrawlerStats` exists as a derived snapshot-builder, but does not own
+independently incremented counters. `AsyncCrawler` and its existing components
+remain the sources of truth. Day 7 may retain terminal `FetchResult` data
+needed to derive status/domain summaries, but must not count the same event
+independently in two owners. `CrawlerStats` performs pure aggregation over the
+current source snapshots; it exposes no event-recording or increment API.
+Its public `build_snapshot(...)` operation accepts current/baseline component
+snapshots and returns a new canonical dictionary without mutating its inputs.
 
 `AsyncCrawler.get_crawl_stats()` remains backward compatible. The facade adds
 `AdvancedCrawler.get_stats()` as the canonical detached, JSON-friendly run
-snapshot.
+snapshot. `AsyncCrawler.get_stats()` may thinly delegate canonical snapshot
+assembly to `CrawlerStats` while retaining lifecycle state and source data.
 
 ### 5.2 Canonical snapshot
 
@@ -410,8 +424,12 @@ async def export_to_html_report(self, filename: str | Path) -> Path: ...
 async def close(self) -> None: ...
 ```
 
-- File export methods are asynchronous to preserve the project's async file-I/O
-  contract.
+- File export methods are deliberately asynchronous to preserve the project's
+  async file-I/O contract. The original assignment example omitted `await`, but
+  v1.0 callers must use `await crawler.export_to_json(...)` and
+  `await crawler.export_to_html_report(...)`. The same method names do not have
+  synchronous compatibility variants because those would either block the
+  event loop or make the API context-dependent.
 - `crawl()` obtains sitemap seeds, then delegates page crawling to the existing
   `AsyncCrawler.crawl()`.
 - Overlapping `crawl()` calls on one facade are rejected.
@@ -500,11 +518,22 @@ errors remain logged and isolated from crawling.
 
 ## 11. CLI
 
-The supported entry point is:
+The canonical module entry point is:
 
 ```bash
 ./venv/bin/python -m src.cli [options]
 ```
+
+The assignment-compatible root entry point is also supported:
+
+```bash
+./venv/bin/python crawler.py [options]
+```
+
+Root `crawler.py` re-exports `AdvancedCrawler` so
+`from crawler import AdvancedCrawler` remains valid, and its `__main__` path
+delegates to `src.cli.main()` without duplicating argument parsing or crawler
+orchestration.
 
 Required assignment options:
 
@@ -558,6 +587,12 @@ The benchmark is opt-in and never part of the normal pytest command.
 - It records elapsed time, pages/second, peak memory via `tracemalloc`, and
   configuration for each scale.
 - It validates result counts and exits non-zero on inconsistent results.
+- Work proceeds as baseline measurement, evidence-based bottleneck analysis,
+  and then conditional optimization of a confirmed bottleneck only. If the
+  analysis finds no actionable bottleneck, the result explicitly records that
+  no production optimization was justified.
+- Any production optimization is narrow, preserves observable behavior, and is
+  followed by comparable before/after measurements plus focused regression.
 - It makes no hardware-dependent assertion that async must be faster by a fixed
   factor or memory must stay below a universal threshold.
 
@@ -609,8 +644,9 @@ The product is complete when all of the following are true:
    pipeline and one pooled session.
 7. Explicit and sitemap-derived seeds obey existing filtering, depth, uniqueness,
    and `max_pages` contracts.
-8. Canonical statistics satisfy their invariants, reset per run, distinguish
-   blocked/failed/storage errors, and expose status/domain summaries.
+8. The public `CrawlerStats` derived snapshot-builder and canonical statistics
+   satisfy their invariants, reset per run, distinguish blocked/failed/storage
+   errors, and expose status/domain summaries without duplicate counters.
 9. Strict JSON config, defaults, validation, path resolution, and CLI precedence
    are covered by tests.
 10. Storage configuration constructs only existing backends and preserves
@@ -621,11 +657,16 @@ The product is complete when all of the following are true:
     handlers.
 13. JSON and HTML reports are equivalent at the statistics level, Unicode-safe,
     escaped, self-contained, and atomically replaced.
-14. CLI success/error exit codes and cleanup are covered without invoking a real
-    network or socket.
-15. The opt-in 100/500/1000-page benchmark reports time and memory without
-    hardware-dependent pass thresholds.
-16. README documents installation, JSON configuration, CLI, library API,
-    storage versus reports, testing restrictions, and benchmark usage.
+14. Both CLI entry points, the root compatibility import, success/error exit
+    codes, and cleanup are covered without invoking a real network or socket.
+15. The opt-in 100/500/1000-page benchmark reports time and memory, records its
+    bottleneck analysis, and applies optimization only when evidence justifies
+    it, without hardware-dependent pass thresholds.
+16. README documents installation, JSON configuration, both CLI entry points,
+    the root import, awaited export API, library API, storage versus reports,
+    testing restrictions, and benchmark usage.
 17. `compileall`, `git diff --check`, focused Day 7 tests, and the full
     `-m "not socket"` suite pass in a suitable local environment.
+18. The traceability table in `PLAN.md` maps every original Day 7 requirement,
+    success criterion, and final-project requirement to its SPEC contract,
+    PLAN task, deliberate disposition, and current acceptance evidence.

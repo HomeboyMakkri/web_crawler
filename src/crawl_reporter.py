@@ -10,7 +10,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 CrawlStats = dict[str, int | float]
-RequestStats = dict[str, Any]
+RequestStats = Mapping[str, Any]
 
 
 class CrawlReporter:

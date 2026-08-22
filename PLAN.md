@@ -153,7 +153,7 @@ and counts are recorded, and the Day 7 gate can be marked complete.
 
 ### D7-00 — Freeze the Days 1-6 baseline
 
-**Status:** pending (reopened after mentor review)
+**Status:** completed
 
 **Dependencies:** D6-R3
 
@@ -163,7 +163,9 @@ Days 1-6 suite before functional Day 7 work.
 **Evidence:** Commit `9ea74f8` marks the Day 4 local-server integration test with
 `pytest.mark.socket`. Later mentor review found that the public
 `AsyncCrawler()` default disabled request retry and that public `DataStorage`
-accepted only `CrawlRecord`; D6-R1 through D6-R3 now track those corrections.
+accepted only `CrawlRecord`; D6-R1 through D6-R3 completed those corrections.
+Before D7-01 began, `main` matched `origin/main` at `90327af`, the worktree was
+clean, and the corrected baseline was committed and verified by D6-R3.
 
 **Definition of Done:** D6-R3 is complete, the corrected baseline is committed
 when the user requests it, socket tests are excluded by `-m "not socket"`, and
@@ -171,11 +173,48 @@ Day 7 starts from verified contracts.
 
 ---
 
+## Original Day 7 assignment traceability
+
+This table is maintained as each task completes. `SPEC.md` remains normative;
+the table prevents an original-assignment requirement from disappearing during
+architectural decomposition.
+
+| Original requirement | Contract | PLAN tasks | Current evidence |
+| --- | --- | --- | --- |
+| 1. `sitemap.xml` support | SPEC 4 | D7-01, D7-08 | D7-01 parser completed and offline-verified; crawler integration pending D7-08. |
+| 2. `CrawlerStats` and extended statistics | SPEC 5 | D7-02, D7-03, D7-08 | D7-02 outcome source and D7-03 derived snapshot-builder completed and offline-verified; facade exposure remains pending D7-08. |
+| 3. JSON and HTML export with visualizations | SPEC 7-8 | D7-09 | Pending. Export API is deliberately async and must be awaited. |
+| 4. YAML or JSON configuration | SPEC 6 | D7-04 | Pending. v1.0 deliberately selects strict JSON, which satisfies the assignment choice. |
+| 5. `argparse` CLI and required flags | SPEC 11 | D7-10 | Pending. Includes canonical module entry point and root `crawler.py` compatibility wrapper. |
+| 6. Console/file logging and rotation | SPEC 10 | D7-06 | Pending. |
+| 7. Real-time progress, speed, ETA, active work | SPEC 9 | D7-07 | Pending. |
+| 8. `AdvancedCrawler` final integration | SPEC 7 | D7-08 | Pending; facade must compose the existing crawler rather than replace it. |
+| 9. Complete usage demonstration | SPEC 7, 11, 13 | D7-11 | Pending; exact assignment flow is retained with documented JSON and awaited-export corrections. |
+| 10. Performance testing and optimization | SPEC 12 | D7-12 | Pending; baseline and analysis are mandatory, optimization is conditional on evidence. |
+| 11. README, examples, API and configuration docs | SPEC acceptance 16 | D7-13 | Pending. |
+| 12. Optional proxy/cookies/JS/distributed features | SPEC 14 | None for v1.0 | Explicitly out of scope, as allowed by the assignment. |
+| Assignment success criteria | SPEC acceptance 1-18 | D7-14 | Pending final acceptance evidence. |
+| Final project requirements | SPEC 1 and acceptance 1-18 | D7-01 through D7-14 | Days 1-6 baseline complete; Day 7 implementation in progress. |
+
+---
+
 ## Implementation tasks
 
 ### D7-01 — Implement the isolated SitemapParser
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `src/sitemap_parser.py` injects a typed async `FetchResult`
+callable and owns only per-call XML traversal state. Typed fetch, parse, and
+schema errors retain the source sitemap URL; nested failures are warning-only,
+while cancellation propagates. Fake-only coverage verifies urlsets, namespaces,
+empty documents, recursive depth-first ordering, page and sitemap de-duplication,
+cycles, invalid locations, root and nested failures, cancellation, and state
+reset. Current verification: the focused suite passed with `26 passed`;
+`compileall` and `git diff --check` passed; the complete non-socket suite passed
+outside the sandbox with `698 passed, 4 deselected`. The first sandboxed full
+suite run was interrupted after it stopped making progress in the known async
+filesystem/SQLite area. No socket, localhost, or public-network checks were run.
 
 **Dependencies:** D7-00
 
@@ -205,7 +244,21 @@ state and every download goes through the injected callable.
 
 ### D7-02 — Retain terminal page outcome data in AsyncCrawler
 
-**Status:** pending
+**Status:** completed
+
+**Evidence:** `AsyncCrawler` now retains one per-run `FetchResult | None` entry
+for each page task without adding counters or changing queue ownership. The
+detached `get_page_outcomes()` snapshot exposes only terminal tasks; successful
+HTTP results survive later parser or storage failures, robots blocks remain
+distinct, and `None` represents a terminal task with no fetch outcome. State is
+cleared before every sequential crawl. Offline coverage verifies final 2xx/3xx,
+retry-exhausted HTTP errors, network and timeout outcomes, parser failure,
+robots blocking, duplicate URLs, active-task exclusion, detached snapshots,
+sequential reset, storage isolation, and failures before a fetch result exists.
+Current verification: the focused suite passed with `13 passed`; `compileall`
+and `git diff --check` passed; the complete non-socket suite passed outside the
+sandbox with `711 passed, 4 deselected`. No socket, localhost, or public-network
+checks were run.
 
 **Dependencies:** D7-01
 
@@ -233,34 +286,64 @@ for later aggregation and all existing Days 1-6 APIs remain compatible.
 
 ---
 
-### D7-03 — Add canonical run statistics at existing sources of truth
+### D7-03 — Extract the derived CrawlerStats snapshot-builder
 
-**Status:** pending
+**Status:** completed
+
+**Reopened:** Original-assignment traceability review found that the required
+public `CrawlerStats` class and its direct tests were missing.
+
+**Evidence:** `src/crawler_stats.py` now provides the public, stateless
+`CrawlerStats` snapshot-builder. Canonical assembly, final status distribution,
+top-domain aggregation, cumulative request deltas, and nested storage deltas
+are pure calculations over supplied snapshots; the class has no event-recording
+API or mutable counters. `AsyncCrawler` retains lifecycle, timing, page
+outcomes, baselines, and component access, while `get_stats()` delegates
+snapshot construction to `CrawlerStats`. Direct tests cover empty/repeated
+builds, detachment, rates, status/domain ordering, request deltas and permanent
+errors, input immutability, single/composite storage deltas, and invalid storage
+counters. Existing integration tests continue to cover live/sequential runs,
+retry and parser outcomes, robots blocks, and storage isolation. Current
+verification: the focused D7-02/D7-03 suites passed with `35 passed`; the wider
+crawler/request/storage suite passed with `134 passed`; `compileall` and
+`git diff --check` passed; the full non-socket suite passed outside the sandbox
+with `733 passed, 4 deselected`. The first sandboxed full-suite attempt was
+interrupted after it stopped progressing in the known async filesystem/SQLite
+area. No socket, localhost, or public-network checks were run.
 
 **Dependencies:** D7-02
 
-**Prompt:** Extend existing crawl/request state to support SPEC section 5:
-terminal page status distribution, top domains, per-run reset/deltas, and a
-detached canonical snapshot. Do not introduce an independently incremented
-`CrawlerStats` class. Keep `AsyncCrawler.get_crawl_stats()` backward compatible.
+**Prompt:** Implement public `CrawlerStats` in `src/crawler_stats.py` as the
+derived snapshot-builder required by SPEC section 5. Move pure canonical
+snapshot assembly, status-code distribution, top-domain aggregation, and
+request/storage delta calculations out of `AsyncCrawler`. The crawler retains
+run lifecycle state, timing/baselines, page outcomes, and all authoritative
+event sources; `get_stats()` becomes thin delegation. `CrawlerStats` must not
+offer increment/record-event methods or maintain competing mutable counters.
+Keep `AsyncCrawler.get_crawl_stats()` backward compatible.
 
 **Allowed scope:**
 
+- `src/crawler_stats.py`
 - `src/crawler.py`
-- existing stats-owning components only where the source event belongs
+- `tests/test_crawler_stats.py`
 - `tests/test_advanced_stats.py`
-- existing crawl/request stats tests
+- existing crawler stats tests only for compatibility assertions
 
-**Tests:** zero state, success/failure/blocked invariant, redirects, retries
-count only final page status, parser failure keeps the fetch status, no-status
-failures, robots exclusion from status distribution, domain normalization/tie
-ordering/top ten, detached snapshots, sequential run reset,
-cumulative-component deltas, storage failures not page failures.
+**Tests:** direct `CrawlerStats` construction and pure aggregation; zero state;
+success/failure/blocked invariant; redirects; retries count only final page
+status; parser failure keeps the fetch status; no-status failures; robots
+exclusion; domain normalization/tie ordering/top ten; detached snapshots;
+request and single/composite storage deltas; no mutation of supplied inputs;
+AsyncCrawler delegation, live snapshots, sequential reset, and legacy API
+compatibility.
 
 **Non-goals:** reporter formatting, report files, config, CLI.
 
-**Definition of Done:** All canonical fields can be derived without duplicate
-event ownership and Days 1-6 stats APIs remain green.
+**Definition of Done:** `CrawlerStats` is a directly tested public component,
+pure calculations no longer inflate `AsyncCrawler`, all canonical fields are
+derived without duplicate event ownership, and Days 1-6 stats APIs remain
+green.
 
 ---
 
@@ -391,8 +474,10 @@ formatter and existing progress calls require no duplicate reporter.
 **Prompt:** Implement `AdvancedCrawler` and `from_config()` according to SPEC
 section 7. Resolve sitemap seeds through `SitemapParser` using the underlying
 crawler's `RequestExecutor`, then delegate the combined seeds to the existing
-AsyncCrawler. Compose configured storage, stats, and lifecycle. Do not configure
-global logging and do not implement exporters or CLI in this task.
+AsyncCrawler. Compose configured storage, the required derived `CrawlerStats`
+snapshot-builder, and lifecycle. The facade and crawler must expose the same
+canonical derived snapshot; neither may own competing counters. Do not
+configure global logging and do not implement exporters or CLI in this task.
 
 **Allowed scope:**
 
@@ -413,7 +498,7 @@ storage stats shape, no global logging mutation.
 
 **Definition of Done:** The facade delegates page work to one AsyncCrawler and
 has no competing queue, retry, politeness, transport, reporter, or storage
-manager.
+manager, and its statistics come from the one derived `CrawlerStats` path.
 
 ---
 
@@ -426,7 +511,11 @@ manager.
 **Prompt:** Implement the canonical report payload and asynchronous JSON/HTML
 exports from SPEC section 8, then expose them through `AdvancedCrawler`. Use
 atomic replacement, Unicode-safe output, HTML escaping, inline CSS
-visualizations, and no external resources.
+visualizations, and no external resources. Preserve the deliberate async public
+API: both export methods return awaitables and every checked-in call site uses
+`await`. A verbatim, explicitly non-runnable traceability quotation of the
+original assignment is the only exception; do not add synchronous methods with
+the same names to imitate its unawaited export call.
 
 **Allowed scope:**
 
@@ -443,8 +532,9 @@ status/domain bars and tables, JSON/HTML statistics equivalence.
 **Non-goals:** changing CrawlRecord storage, PDF, external chart libraries,
 synchronous file writes.
 
-**Definition of Done:** Both formats represent the same completed-run snapshot
-and cannot leave a partial destination.
+**Definition of Done:** Both awaited export methods represent the same
+completed-run snapshot, cannot leave a partial destination, and are documented
+without an unawaited call site.
 
 ---
 
@@ -454,28 +544,35 @@ and cannot leave a partial destination.
 
 **Dependencies:** D7-06, D7-08, D7-09
 
-**Prompt:** Implement `python -m src.cli` with all SPEC section 11 flags,
-config/default merging, logging setup, crawl/export orchestration, concise
-stderr errors, exit codes, and unconditional cleanup. Test `main(argv)` through
+**Prompt:** Implement canonical `python -m src.cli` with all SPEC section 11
+flags, config/default merging, logging setup, crawl/export orchestration,
+concise stderr errors, exit codes, and unconditional cleanup. Add root
+`crawler.py` as the assignment-compatible wrapper: re-export
+`AdvancedCrawler`, and delegate its `__main__` path to `src.cli.main()` without
+duplicating argparse or orchestration. Test both entry points through
 injected/mocked facade dependencies only.
 
 **Allowed scope:**
 
 - `src/cli.py`
+- `crawler.py`
 - narrow config merge helpers in `src/crawler_config.py`
 - `tests/test_cli.py`
+- `tests/test_crawler_entrypoint.py`
 
 **Tests:** help, required source after merge, every flag, replacement of URL
 lists, CLI/config/default precedence, boolean optional flags, invalid values,
 JSON and HTML output selection, final console summary, exit 0/1/2, export
 failure, cleanup on every path, debug traceback behavior, no session on config
-error.
+error, `from crawler import AdvancedCrawler`, root wrapper delegation, and no
+import-time CLI side effects.
 
-**Non-goals:** root `crawler.py`, interactive prompts, shell completion, socket
-or subprocess network tests.
+**Non-goals:** Interactive prompts, shell completion, duplicated CLI parsing,
+socket or subprocess network tests.
 
-**Definition of Done:** CLI behavior is fully testable in-process and all
-runtime resources close on success or failure.
+**Definition of Done:** Both CLI forms share one implementation, the assignment
+root import works, behavior is fully testable in-process, and all runtime
+resources close on success or failure.
 
 ---
 
@@ -488,7 +585,31 @@ runtime resources close on success or failure.
 **Prompt:** Add a Day 7 demonstration covering config, sitemap index, crawling,
 robots/rate/retry, composite storage, stats, logging, and both reports. Separate
 pure app/payload validation tests from the local-server end-to-end test. Mark
-every socket-binding test with `pytest.mark.socket`.
+every socket-binding test with `pytest.mark.socket`. Preserve the exact public
+flow demonstrated by the original assignment. The following block is a
+verbatim, non-normative source quotation, not a runnable v1.0 example:
+
+```python
+from crawler import AdvancedCrawler
+
+async def main():
+    crawler = AdvancedCrawler.from_config("config.yaml")
+    await crawler.crawl()
+    stats = crawler.get_stats()
+    print(f"Обработано: {stats['total_pages']} страниц")
+    print(f"Успешно: {stats['successful']}")
+    print(f"Ошибок: {stats['failed']}")
+    crawler.export_to_html_report("report.html")
+    await crawler.close()
+
+asyncio.run(main())
+```
+
+The checked-in runnable v1.0 example must keep that flow while applying the two
+documented contract decisions: use `config.json` because v1.0 selected JSON
+from the assignment's YAML-or-JSON choice, and use
+`await crawler.export_to_html_report("report.html")` because exports are async.
+It must import `asyncio` and close in `finally` or an async context manager.
 
 **Allowed scope:**
 
@@ -506,7 +627,9 @@ artifact integrity; repeated demo reset removes only known demo files.
 permission, production benchmark claims.
 
 **Definition of Done:** Default `-m "not socket"` verifies all pure demo logic;
-the marked integration test is documented but only run with permission.
+the root-import example reproduces the assignment flow with the documented JSON
+and async-export corrections; the marked integration test is documented but
+only run with permission.
 
 ---
 
@@ -516,24 +639,34 @@ the marked integration test is documented but only run with permission.
 
 **Dependencies:** D7-08
 
-**Prompt:** Implement the opt-in benchmark from SPEC section 12 using equivalent
-deterministic simulated latency/payloads for sync and async paths. Measure
-elapsed time, throughput, and peak `tracemalloc` memory for requested scales.
+**Prompt:** Implement the opt-in benchmark from SPEC section 12 in three stages:
+(1) establish a comparable 100/500/1000-page baseline using equivalent
+deterministic simulated latency/payloads for sync and async paths; (2) analyze
+elapsed time, throughput, peak `tracemalloc` memory, and profiling evidence to
+identify a concrete bottleneck; (3) optimize only a confirmed bottleneck, then
+rerun the same measurements. If analysis finds no justified production change,
+record that conclusion instead of changing code speculatively.
 
 **Allowed scope:**
 
 - `src/benchmark.py`
 - `tests/test_benchmark.py`
+- one specifically identified Day 7 production module only after benchmark or
+  profiling evidence confirms its bottleneck
 
 **Tests:** argument validation, deterministic counts, requested 100/500/1000
 scales represented, metrics schema, inconsistent result failure, no socket/DNS
-calls, lightweight small-scale unit tests only.
+calls, lightweight small-scale unit tests only, behavioral equivalence before
+and after any optimization.
 
 **Non-goals:** pytest performance thresholds, real sites, localhost server,
-profiling-driven production optimization, claims of universal speedup.
+broad/speculative optimization, claims of universal speedup.
 
 **Definition of Done:** The harness is opt-in, reproducible, network-free, and
-reports rather than asserts hardware-dependent performance.
+reports rather than asserts hardware-dependent performance. Baseline and
+analysis conclusions are recorded; a confirmed optimization includes comparable
+before/after evidence and focused regression, while a no-optimization result
+explicitly explains why no production change was justified.
 
 ---
 
@@ -546,11 +679,16 @@ reports rather than asserts hardware-dependent performance.
 **Prompt:** Update README for the finished product and add any concise API/config
 examples required by SPEC acceptance criterion 16. Document exact commands,
 JSON keys, precedence, sitemap behavior, statistics meanings, storage versus
-reports, lifecycle, logging, testing restrictions, and benchmark limitations.
+reports, `CrawlerStats` ownership, lifecycle, logging, testing restrictions,
+benchmark analysis/optimization limitations, both CLI entry points, the root
+`AdvancedCrawler` import, and awaited export calls. Complete the evidence column
+of the original-assignment traceability table in this plan without weakening
+its mapping.
 
 **Allowed scope:**
 
 - `README.md`
+- `PLAN.md` for traceability evidence only
 - checked-in example config
 - docstrings only where public API documentation is missing
 
@@ -573,13 +711,15 @@ and close the crawler using only checked-in documentation.
 **Dependencies:** D7-01 through D7-13
 
 **Prompt:** Perform a read-only-first acceptance audit against every SPEC section
-and criterion. Search for duplicate retry/politeness/storage/stats/session
-mechanisms, unmarked socket use, blocking async I/O, unclosed resources, and
-untestable requirements. Fix only confirmed acceptance defects and add focused
-regressions.
+and criterion, and separately against every row in the original-assignment
+traceability table in this plan. Search for duplicate retry,
+politeness, storage, stats, or session mechanisms, unmarked socket use, blocking
+async I/O, unclosed resources, and untestable requirements. Fix only confirmed
+acceptance defects and add focused regressions.
 
-**Allowed scope:** Any Day 7 file or test required for a confirmed defect;
-unrelated Days 1-6 refactors are forbidden.
+**Allowed scope:** The traceability evidence column in `PLAN.md` plus any Day 7
+file or test required for a confirmed defect; unrelated Days 1-6 refactors are
+forbidden.
 
 **Required verification:**
 
@@ -593,10 +733,10 @@ git status --short --branch
 Socket tests and demos remain unexecuted unless the user grants explicit
 permission in that chat.
 
-**Definition of Done:** Every acceptance criterion has current evidence, all
-non-socket tests pass, documents match behavior, optional features remain out of
-scope, and any unrun socket checks are reported explicitly rather than implied
-green.
+**Definition of Done:** Every SPEC acceptance criterion and every original-
+assignment table row has current evidence, all non-socket tests pass, documents
+match behavior, optional features remain explicitly disposed as out of scope,
+and any unrun socket checks are reported rather than implied green.
 
 ## Dependency summary
 
@@ -606,13 +746,13 @@ D6-R2 storage dict boundary ─┴─> D6-R3 baseline audit ─> D7-00
 
 D7-00
 ├── D7-01 SitemapParser
-├── D7-02 terminal page outcomes
-│   └── D7-03 run statistics
-│       └── D7-07 progress/ETA
-├── D7-04 JSON configuration
-│   ├── D7-05 storage factory
-│   └── D7-06 logging
-└── D7-08 AdvancedCrawler
+│   └── D7-02 terminal page outcomes
+│       └── D7-03 CrawlerStats extraction
+│           └── D7-07 progress/ETA
+└── D7-04 JSON configuration
+    ├── D7-05 storage factory
+    └── D7-06 logging
+D7-08 AdvancedCrawler
     depends on D7-01 through D7-05 and D7-07
     ├── D7-09 reports
     │   └── D7-10 CLI (also depends on D7-06)
@@ -620,5 +760,6 @@ D7-00
     └── D7-12 benchmark
 
 D7-13 documentation depends on D7-09 through D7-12.
-D7-14 acceptance audit depends on every implementation/documentation task.
+D7-14 acceptance audit depends on every implementation/documentation task and
+checks both SPEC.md and the original-assignment traceability table above.
 ```

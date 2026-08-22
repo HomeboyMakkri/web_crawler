@@ -5,13 +5,15 @@ import logging
 import time
 from collections.abc import Callable
 from numbers import Real
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
 from .crawl_record import CrawlRecord
 from .crawl_reporter import CrawlReporter
 from .crawler_queue import CrawlerQueue
+from .crawler_stats import CrawlerStats, RequestStatsSnapshot, RunStats
+from .composite_storage import CompositeStorage
 from .data_storage import DataStorage
 from .error_tracker import ErrorTracker
 from .errors import ParseError
@@ -92,6 +94,8 @@ class AsyncCrawler:
             retry_strategy=self._retry_strategy,
         )
         self._error_tracker = ErrorTracker()
+        self._crawler_stats = CrawlerStats()
+        self._storage = storage
         self._storage_manager = (
             StorageManager(storage)
             if storage is not None
@@ -103,10 +107,13 @@ class AsyncCrawler:
         self.failed_urls: dict[str, str] = {}
         self.blocked_urls: dict[str, str] = {}
         self.url_depths: dict[str, int] = {}
+        self._page_outcomes: dict[str, FetchResult | None] = {}
         self._crawl_queue: CrawlerQueue | None = None
         self._crawl_running = False
         self._crawl_started_at: float | None = None
         self._crawl_finished_at: float | None = None
+        self._request_stats_baseline: RequestStatsSnapshot | None = None
+        self._storage_stats_baseline = self._get_storage_stats_snapshot()
 
     @property
     def session(self) -> aiohttp.ClientSession | None:
@@ -180,14 +187,14 @@ class AsyncCrawler:
         results = await asyncio.gather(*(self.fetch_url(url) for url in urls))
         return dict(zip(urls, results, strict=True))
 
-    def get_request_stats(self) -> dict[str, object]:
+    def get_request_stats(self) -> RequestStatsSnapshot:
         """Aggregate HTTP, politeness and retry statistics."""
         transport = self._transport.get_stats()
         politeness = self._politeness.get_stats()
         errors = self._error_tracker.get_stats(
             self._retry_strategy.get_stats(),
         )
-        return {
+        snapshot: RequestStatsSnapshot = {
             "total_requests": transport["total_requests"],
             "successful_requests": transport["successful_requests"],
             "failed_requests": transport["failed_requests"],
@@ -202,17 +209,24 @@ class AsyncCrawler:
             "delayed_requests": politeness["delayed_requests"],
             "total_rate_limit_wait": politeness["total_rate_limit_wait"],
             "average_rate_limit_wait": politeness["average_rate_limit_wait"],
-            "scheduled_retries": errors["scheduled_retries"],
-            "total_backoff_time": errors["total_backoff_time"],
-            "errors_by_type": errors["errors_by_type"],
-            "successful_retries": errors["successful_retries"],
-            "average_retry_wait": errors["average_retry_wait"],
-            "permanent_error_urls": errors["permanent_error_urls"],
+            "scheduled_retries": cast(int, errors["scheduled_retries"]),
+            "total_backoff_time": cast(float, errors["total_backoff_time"]),
+            "errors_by_type": cast(
+                dict[str, int],
+                errors["errors_by_type"],
+            ),
+            "successful_retries": cast(int, errors["successful_retries"]),
+            "average_retry_wait": cast(float, errors["average_retry_wait"]),
+            "permanent_error_urls": cast(
+                list[str],
+                errors["permanent_error_urls"],
+            ),
             "robots_network_fetches": politeness["robots_network_fetches"],
             "robots_cache_hits": politeness["robots_cache_hits"],
             "robots_allowed": politeness["robots_allowed"],
             "robots_blocked": politeness["robots_blocked"],
         }
+        return snapshot
 
     def get_error_stats(self) -> dict[str, object]:
         """Return retry counters and the latest final failures by URL."""
@@ -220,9 +234,31 @@ class AsyncCrawler:
             self._retry_strategy.get_stats(),
         )
 
+    def get_page_outcomes(self) -> dict[str, FetchResult | None]:
+        """Return a detached map of page tasks to their final fetch outcomes.
+
+        ``None`` means that the task became terminal without receiving an HTTP
+        outcome. The immutable ``FetchResult`` values can be shared safely.
+        """
+        if self._crawl_queue is None:
+            return {}
+        terminal_urls = set(self._crawl_queue.processed_urls)
+        terminal_urls.update(self._crawl_queue.failed_urls)
+        terminal_urls.update(self._crawl_queue.blocked_urls)
+        return {
+            url: outcome
+            for url, outcome in self._page_outcomes.items()
+            if url in terminal_urls
+        }
+
     async def fetch_and_parse(self, url: str) -> dict[str, Any]:
         """Load one URL and return its structured parsed representation."""
         fetch_result = await self.fetch_result(url)
+        if (
+            self._crawl_queue is not None
+            and url in self._crawl_queue.active_urls
+        ):
+            self._page_outcomes[url] = fetch_result
         if not fetch_result.is_success:
             error = self._to_legacy_fetch_value(fetch_result)
             logger.warning("Skipping HTML parsing for %s: %s", url, error)
@@ -387,11 +423,34 @@ class AsyncCrawler:
             "pages_per_second": round(completed / elapsed, 3) if elapsed else 0.0,
         }
 
+    def get_stats(self) -> RunStats:
+        """Return the detached canonical statistics for the current run."""
+        return self._crawler_stats.build_snapshot(
+            crawl_stats=self.get_crawl_stats(),
+            elapsed_seconds=self._get_crawl_elapsed(),
+            page_outcomes=self.get_page_outcomes(),
+            request_stats=self.get_request_stats(),
+            request_stats_baseline=self._request_stats_baseline,
+            final_errors=self._error_tracker.final_errors,
+            storage_stats=self._get_storage_stats_snapshot(),
+            storage_stats_baseline=self._storage_stats_baseline,
+        )
+
     def _get_crawl_elapsed(self) -> float:
         if self._crawl_started_at is None:
             return 0.0
         finished_at = self._crawl_finished_at or time.perf_counter()
         return max(0.0, finished_at - self._crawl_started_at)
+
+    def _get_storage_stats_snapshot(self) -> dict[str, object] | None:
+        if self._storage_manager is None:
+            return None
+        if isinstance(self._storage, CompositeStorage):
+            return {
+                name: dict(stats)
+                for name, stats in self._storage.get_stats().items()
+            }
+        return dict(self._storage_manager.get_stats())
 
     async def _crawl_worker(
         self,
@@ -406,6 +465,7 @@ class AsyncCrawler:
             task = await queue._wait_for_next_task()
             self.visited_urls.add(task.url)
             self.url_depths[task.url] = task.depth
+            self._page_outcomes[task.url] = None
 
             try:
                 result = await self.fetch_and_parse(task.url)
@@ -451,12 +511,15 @@ class AsyncCrawler:
 
     def _reset_crawl_state(self) -> None:
         """Clear results before starting an independent crawl run."""
+        self._request_stats_baseline = self.get_request_stats()
+        self._storage_stats_baseline = self._get_storage_stats_snapshot()
         self.visited_urls.clear()
         self.processed_urls.clear()
         self.failed_urls.clear()
         self.blocked_urls.clear()
         self._error_tracker.clear_final_errors()
         self.url_depths.clear()
+        self._page_outcomes.clear()
         self._crawl_queue = None
         self._crawl_started_at = None
         self._crawl_finished_at = None
